@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+._*
+
+# Large media (>100 MB — GitHub rejects)
+*.mov
+*.mp4
+*.m4v
+
+# Editor / OS
+*.swp
+.vscode/
+.idea/
+
+# Node (if ever introduced)
+node_modules/
+
+# Local server logs
+*.log

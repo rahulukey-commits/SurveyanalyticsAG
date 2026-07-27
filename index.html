@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Karnival · NPS &amp; Smart Feedback Analytics</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>" />
+  <link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Top bar -->
+    <header class="topbar">
+      <button class="burger" aria-label="Menu">☰</button>
+      <div class="logo"><span class="spark">◈</span> KARNIVAL</div>
+      <div class="search">
+        <div class="seg">Phone Numb… ▾</div>
+        <input placeholder="Search Customer By Mobile" />
+        <button class="go" aria-label="Search">🔍</button>
+      </div>
+      <div class="spacer"></div>
+      <div class="account">Athlete's Co AG ▾</div>
+      <div class="avatar">RU</div>
+    </header>
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="nav-item"><span class="ic">🏠</span> Home</div>
+      <div class="nav-item group open"><span class="ic">👥</span> CX Management <span class="chev">▾</span></div>
+      <div class="subnav">
+        <div class="sub">Surveys</div>
+        <div class="sub">Dashboard Creator</div>
+        <div class="sub">Forms</div>
+        <div class="sub active">NPS/Feedback</div>
+        <div class="sub">Feedback Ticketing</div>
+        <div class="sub">Opt-In</div>
+        <div class="sub">KPI</div>
+        <div class="sub">Surveys (Legacy)</div>
+      </div>
+      <div class="nav-item"><span class="ic">🎫</span> Ticketing <span class="chev">▾</span></div>
+      <div class="nav-item"><span class="ic">🎁</span> Loyalty <span class="chev">▾</span></div>
+      <div class="nav-item"><span class="ic">📣</span> CRM Campaigns <span class="chev">▾</span></div>
+      <div class="nav-item"><span class="ic">🪟</span> Website <span class="chev">▾</span></div>
+      <div class="nav-item"><span class="ic">🏪</span> POS <span class="chev">▾</span></div>
+      <div class="nav-item"><span class="ic">🖼️</span> UGC <span class="chev">▾</span></div>
+      <div class="nav-item"><span class="ic">🧭</span> Product Insights <span class="chev">▾</span></div>
+      <div class="nav-item"><span class="ic">👤</span> Customers <span class="chev">▾</span></div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <nav class="breadcrumb">
+        <a href="#">Home</a><span class="sep">›</span>
+        <a href="#">CX Management</a><span class="sep">›</span>
+        <a href="#">NPS Feedback</a><span class="sep">›</span>
+        <span class="current">Multi-Tier Pilot latest <span class="chev">▾</span></span>
+      </nav>
+      <div class="tabs" id="tabs"></div>
+      <div id="tab-content"></div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="social">
+        <a href="#" aria-label="Facebook">f</a>
+        <a href="#" aria-label="Instagram">◎</a>
+        <a href="#" aria-label="Twitter">✦</a>
+        <a href="#" aria-label="LinkedIn">in</a>
+      </div>
+      <span class="ver">v1.6.0</span>
+    </footer>
+  </div>
+
+  <script src="assets/vendor/echarts.min.js"></script>
+  <script src="assets/vendor/echarts-wordcloud.min.js"></script>
+  <script src="assets/js/mock-api.js?v=7"></script>
+  <script src="assets/js/charts.js?v=7"></script>
+  <script src="assets/js/time-intel.js?v=7"></script>
+  <script src="assets/js/app.js?v=7"></script>
+</body>
+</html>
