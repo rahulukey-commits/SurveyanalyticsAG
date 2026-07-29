@@ -1,0 +1,845 @@
+/* ============================================================================
+ * Survey Analytics — full replication of the live Karnival module
+ * (dashboard.karnival.in/#/survey-analytics), scoped to the 5 Haldiram brands.
+ * Charts: ECharts (via Charts.*). Data: SurveyApi.* (swappable for a backend).
+ *
+ * Progressive Drilldown  → NPS · CSAT · CES · RATING
+ *      Aggregate gauge + Distribution of Responses
+ *      Business Units: bar (Load More / Show All) ⇄ table (7 cols + pagination)
+ *      click any row/bar → Country → State → Zone → Store (stacked levels)
+ * AI Sentiment Analysis  → Executive Pulse (Score Trend · Sentiment
+ *      Contribution · Top 5 Aspects) | Voice Of Customer (theme cloud + feed)
+ * Area Of Improvements   → Things To Improve | Appreciation (stacked + total)
+ * Metrics Comparison     → metric + brand chips + trends + band legend
+ * Channel Analysis       → Channel Overview · Communication Journey ·
+ *      Submissions by Channel
+ * ========================================================================== */
+(function (global) {
+  'use strict';
+
+  function render(root) {
+    const U = global.NpsUI, el = U.el, $ = U.$;
+    const API = global.SurveyApi;
+    const fmt = n => typeof n === 'number' ? n.toLocaleString() : n;
+
+    const state = { top: 'drill', drill: 'NPS', senti: 'exec', improve: 'improve' };
+
+    root.appendChild(el(`<div class="sa-head"><button class="sa-back" aria-label="Back">←</button><h2>Survey Analytics</h2></div>`));
+    const shell = el('<div class="sa-shell"></div>');
+    const topBar = el('<div class="sa-toptabs" role="tablist"></div>');
+    shell.appendChild(topBar);
+    const body = el('<div class="sa-body"></div>');
+    shell.appendChild(body);
+    root.appendChild(shell);
+
+    const TOPS = [
+      { k: 'drill',     label: 'Progressive Drilldown', fn: renderDrilldown },
+      { k: 'sentiment', label: 'AI Sentiment Analysis', fn: renderSentiment },
+      { k: 'improve',   label: 'Area Of Improvements',  fn: renderImprove },
+      { k: 'compare',   label: 'Metrics Comparison',    fn: renderCompare },
+      { k: 'channel',   label: 'Channel Analysis',      fn: renderChannel },
+      { k: 'time',      label: 'Time Intelligence',     fn: renderTimeIntel }
+    ];
+    TOPS.forEach(t => {
+      const tab = el(`<button class="sa-toptab ${t.k === state.top ? 'active' : ''}" role="tab" data-k="${t.k}">${t.label}</button>`);
+      tab.addEventListener('click', () => { state.top = t.k; topBar.querySelectorAll('.sa-toptab').forEach(x => x.classList.toggle('active', x.dataset.k === t.k)); paint(); });
+      topBar.appendChild(tab);
+    });
+    function paint() { body.innerHTML = ''; TOPS.find(t => t.k === state.top).fn(body); requestAnimationFrame(() => Charts.resizeAll()); }
+
+    // ---------- shared bits -------------------------------------------------
+    function subTabs(items, active, onSelect) {
+      const w = el('<div class="sa-subtabs" role="tablist"></div>');
+      items.forEach(it => {
+        const b = el(`<button class="sa-subtab ${it.k === active ? 'active' : ''}" data-k="${it.k}" role="tab">${it.label}</button>`);
+        b.addEventListener('click', () => { w.querySelectorAll('.sa-subtab').forEach(x => x.classList.toggle('active', x.dataset.k === it.k)); onSelect(it.k); });
+        w.appendChild(b);
+      });
+      return w;
+    }
+    function filterRow(opts) {
+      opts = opts || {};
+      const st = { period: opts.period || 'This Month', range: opts.range || '01 Jul 2026 - 28 Jul 2026',
+        channels: 'Sms, Email, Whatsapp, Other', brands: opts.brand ? API.brandNames[3] : 'All Brands', search: '' };
+      const bar = el('<div class="sa-filters"></div>');
+      if (opts.search) {
+        const s = el('<input class="sa-search" placeholder="Search" />');
+        s.addEventListener('input', () => { st.search = s.value; opts.onChange && opts.onChange(st); });
+        bar.appendChild(s);
+        const sortBtn = el('<button class="sa-tool" title="Sort">⇅</button>');
+        sortBtn.addEventListener('click', () => { st.sortFlip = !st.sortFlip; opts.onChange && opts.onChange(st); });
+        bar.appendChild(sortBtn);
+      }
+      bar.appendChild(el('<span style="flex:1"></span>'));
+      bar.appendChild(U.selectEl(st.period, ['Today', 'Yesterday', 'This Week', 'This Month', 'Last 7 Days', 'Last 28 Days', 'Custom'], st.period, v => { st.period = v; opts.onChange && opts.onChange(st); }));
+      bar.appendChild(el(`<div class="sa-daterange">${st.range}</div>`));
+      if (opts.channel) bar.appendChild(U.selectEl(st.channels, ['Sms, Email, Whatsapp, Other', 'Sms', 'Email', 'Whatsapp', 'Other'], st.channels, v => { st.channels = v; opts.onChange && opts.onChange(st); }));
+      if (opts.brand) bar.appendChild(U.selectEl(st.brands, ['All Brands'].concat(API.brandNames), st.brands, v => { st.brands = v; opts.onChange && opts.onChange(st); }));
+      return { bar: bar, st: st };
+    }
+    const bandLegend = () => el(`<div class="sa-legend">${API.BAND_COLORS.map(b => `<span class="sa-legend-item"><i class="sa-dot" style="background:${b.color}"></i>${b.label}</span>`).join('')}</div>`);
+
+    // =========================================================================
+    // 1. Progressive Drilldown
+    // =========================================================================
+    function renderDrilldown(host) {
+      host.appendChild(subTabs([{ k: 'NPS', label: 'NPS' }, { k: 'CSAT', label: 'CSAT' }, { k: 'CES', label: 'CES' }, { k: 'RATING', label: 'RATING' }],
+        state.drill, k => { state.drill = k; draw(); }));
+      const holder = el('<div></div>'); host.appendChild(holder);
+      draw();
+
+      function draw() {
+        holder.innerHTML = '';
+        const metric = state.drill;
+        const fr = filterRow({ onChange: () => draw() });
+        holder.appendChild(fr.bar);
+
+        // ---- Aggregate + distribution
+        const agg = API.aggregate(metric);
+        const c1 = el('<section class="sa-card"></section>');
+        const grid = el('<div class="sa-agg-grid"></div>');
+        const gcol = el(`<div><h4 class="sa-h4">Aggregate ${metric} <span class="sa-info" title="Score across all responses">ⓘ</span></h4><div class="sa-gauge"></div></div>`);
+        const dcol = el(`<div><h4 class="sa-h4">Distribution of Responses</h4>
+          <div class="muted sa-sub">Total Surveys Generated : ${agg.totalSurveys}&nbsp;&nbsp;Responses Received : ${agg.responses}</div></div>`);
+        const rows = el('<div class="sa-dist-rows"></div>');
+        agg.rows.forEach(r => rows.appendChild(el(`<div class="sa-dist-row">
+          <div class="sa-dist-lbl">${r.key} ${r.range ? `<span class="muted">${r.range}</span>` : ''} <span class="sa-star" title="Favourite">☆</span></div>
+          <div class="sa-dist-bar"><div class="sa-dist-fill" style="width:${r.pct}%;background:${r.color}">${r.pct >= 6 ? r.pct + '%' : ''}</div></div>
+          <div class="sa-dist-n">${r.users} Users</div></div>`)));
+        dcol.appendChild(rows);
+        grid.appendChild(gcol); grid.appendChild(dcol); c1.appendChild(grid);
+        holder.appendChild(c1);
+        Charts.surveyGauge($('.sa-gauge', gcol), agg.value, agg.min, agg.max);
+
+        // ---- Business Units + progressive drilldown levels
+        const c2 = el('<section class="sa-card"></section>');
+        c2.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any brand to drill down to countries, states, zones and stores.</div>`));
+        const levels = el('<div></div>');
+        c2.appendChild(levels);
+        holder.appendChild(c2);
+        const path = [];
+        renderLevels();
+
+        function renderLevels() {
+          levels.innerHTML = '';
+          for (let d = 0; d <= path.length; d++) {
+            const p = path.slice(0, d);
+            levels.appendChild(levelBlock(metric, p, d, path[d] || null, picked => {
+              path.length = d; path.push(picked); renderLevels(); requestAnimationFrame(() => Charts.resizeAll());
+            }));
+          }
+          requestAnimationFrame(() => Charts.resizeAll());
+        }
+      }
+    }
+
+    // one drilldown level (bar with Load More/Show All  ⇄  table with pagination)
+    function levelBlock(metric, path, depth, selected, onPick) {
+      const all = API.drilldown(metric, path);
+      const wrap = el('<div class="sa-level"></div>');
+      const vs = { view: 'bar', shown: depth === 0 ? 5 : all.length, page: 0, per: 10, search: '', dir: -1 };
+      const totalResp = all.reduce((a, r) => a + r.responses, 0);
+
+      const title = depth === 0
+        ? `<b>Business Units</b>`
+        : `<span class="muted">${['Business Units'].concat(path.slice(0, -1)).join(' › ')} › </span><b>${path[path.length - 1]}</b> <span class="muted">›</span> <b>${API.levelName(depth)}</b>`;
+      const agg0 = API.aggregate(metric);
+      const respLabel = depth === 0 ? agg0.responses : fmt(totalResp);
+      const head = el(`<div class="sa-level-head"><div class="sa-level-title">${title}
+        <div class="muted sa-sub">Total Surveys Generated: ${agg0.totalSurveys}&nbsp;&nbsp;Responses Received: ${respLabel}</div></div>
+        <div class="sa-level-tools"></div></div>`);
+      const tools = $('.sa-level-tools', head);
+      const searchEl = el('<input class="sa-search" placeholder="Search" />');
+      const sortEl = el('<button class="sa-tool" title="Sort">⇅</button>');
+      const barBtn = el('<button class="sa-tool sa-tool-active" title="Bar view">▥</button>');
+      const tblBtn = el('<button class="sa-tool" title="Table view">☰</button>');
+      if (depth === 0) tools.appendChild(searchEl);
+      tools.appendChild(sortEl); tools.appendChild(barBtn); tools.appendChild(tblBtn);
+      wrap.appendChild(head);
+      wrap.appendChild(bandLegend());
+      const canvas = el('<div></div>');
+      wrap.appendChild(canvas);
+
+      searchEl.addEventListener('input', () => { vs.search = searchEl.value; vs.shown = depth === 0 ? 5 : all.length; vs.page = 0; paintLevel(); });
+      sortEl.addEventListener('click', () => { vs.dir *= -1; paintLevel(); });
+      barBtn.addEventListener('click', () => { vs.view = 'bar'; barBtn.classList.add('sa-tool-active'); tblBtn.classList.remove('sa-tool-active'); paintLevel(); });
+      tblBtn.addEventListener('click', () => { vs.view = 'tbl'; tblBtn.classList.add('sa-tool-active'); barBtn.classList.remove('sa-tool-active'); paintLevel(); });
+      paintLevel();
+      return wrap;
+
+      function filtered() {
+        let rows = vs.search ? all.filter(r => r.name.toLowerCase().indexOf(vs.search.toLowerCase()) >= 0) : all.slice();
+        rows.sort((a, b) => (Number(a.value) - Number(b.value)) * vs.dir);
+        return rows;
+      }
+      function paintLevel() {
+        canvas.innerHTML = '';
+        const rows = filtered();
+        if (vs.view === 'bar') {
+          const show = rows.slice(0, vs.shown);
+          const box = el(`<div class="chart" style="height:${Math.max(180, show.length * 34 + 80)}px"></div>`);
+          canvas.appendChild(box);
+          Charts.divergingBars(box, show, { colorFor: API.colorFor, metricLabel: metric,
+            tag: metric === 'RATING' ? '' : metric, faded: selected ? [selected] : [],
+            onClick: r => { if (API.canDrill(depth)) onPick(r.name); } });
+          if (rows.length > vs.shown) {
+            const remaining = rows.length - vs.shown;
+            const more = el(`<div class="sa-loadmore">
+              <button class="sa-outline sa-more">Load More (${Math.min(5, remaining)} more)</button>
+              <button class="sa-linkbtn sa-all">Show All (${remaining} remaining)</button>
+              <div class="muted sa-sub sa-count">${vs.shown} of ${rows.length} entries shown</div></div>`);
+            $('.sa-more', more).addEventListener('click', () => { vs.shown = Math.min(rows.length, vs.shown + 5); paintLevel(); requestAnimationFrame(() => Charts.resizeAll()); });
+            $('.sa-all', more).addEventListener('click', () => { vs.shown = rows.length; paintLevel(); requestAnimationFrame(() => Charts.resizeAll()); });
+            canvas.appendChild(more);
+          }
+        } else {
+          const start = vs.page * vs.per, pageRows = rows.slice(start, start + vs.per);
+          const table = el(`<table class="table sa-table"><thead><tr>
+            <th>Name</th><th class="ta-r">Score</th><th class="ta-r">Promoter</th><th class="ta-r">Passive</th>
+            <th class="ta-r">Detractor</th><th class="ta-r">Responses</th><th class="ta-r">Trend</th></tr></thead><tbody></tbody></table>`);
+          const tb = $('tbody', table);
+          pageRows.forEach(r => {
+            const col = API.colorFor(Number(r.value));
+            const tr = el(`<tr class="sa-rowlink" tabindex="0">
+              <td>${r.name}</td>
+              <td class="ta-r" style="color:${col};font-weight:600">${r.value}</td>
+              <td class="ta-r" style="color:#22c55e">${r.promoter}%</td>
+              <td class="ta-r" style="color:#f59e0b">${r.passive}%</td>
+              <td class="ta-r" style="color:#ef4444">${r.detractor}%</td>
+              <td class="ta-r">${fmt(r.responses)}</td>
+              <td class="ta-r" style="color:${r.trend > 0 ? '#22c55e' : r.trend < 0 ? '#ef4444' : '#8b91a0'}">${r.trend > 0 ? '+' : ''}${r.trend}% ${r.trend > 0 ? '↗' : r.trend < 0 ? '↘' : ''}</td></tr>`);
+            tr.addEventListener('click', () => { if (API.canDrill(depth)) onPick(r.name); });
+            tr.addEventListener('keydown', e => { if (e.key === 'Enter' && API.canDrill(depth)) onPick(r.name); });
+            tb.appendChild(tr);
+          });
+          canvas.appendChild(table);
+          // pagination footer
+          const pages = Math.max(1, Math.ceil(rows.length / vs.per));
+          const foot = el(`<div class="sa-pager">
+            <div class="sa-pager-l">${'' }<span class="sa-perpage"></span> <span class="muted">per page</span></div>
+            <div class="muted">Showing <b>${rows.length ? start + 1 : 0}</b> to <b>${Math.min(start + vs.per, rows.length)}</b> of <b>${rows.length}</b> entries</div>
+            <div class="sa-pager-r"><button class="sa-outline sa-prev" ${vs.page === 0 ? 'disabled' : ''}>Previous</button>
+              <span class="muted">Page</span> <span class="sa-pagebox">${vs.page + 1}</span> <span class="muted">of ${pages}</span>
+              <button class="sa-outline sa-next" ${vs.page >= pages - 1 ? 'disabled' : ''}>Next</button></div></div>`);
+          $('.sa-perpage', foot).appendChild(U.selectEl(String(vs.per), ['10', '25', '50', '100'], String(vs.per), v => { vs.per = +v; vs.page = 0; paintLevel(); }));
+          $('.sa-prev', foot).addEventListener('click', () => { if (vs.page > 0) { vs.page--; paintLevel(); } });
+          $('.sa-next', foot).addEventListener('click', () => { if (vs.page < pages - 1) { vs.page++; paintLevel(); } });
+          canvas.appendChild(foot);
+        }
+      }
+    }
+
+    // =========================================================================
+    // 2. AI Sentiment Analysis
+    // =========================================================================
+    function renderSentiment(host) {
+      host.appendChild(subTabs([{ k: 'exec', label: 'Executive Pulse' }, { k: 'voc', label: 'Voice Of Customer' }],
+        state.senti, k => { state.senti = k; draw(); }));
+      const holder = el('<div></div>'); host.appendChild(holder);
+      draw();
+
+      function draw() {
+        holder.innerHTML = '';
+        const fr = filterRow({ brand: true, period: 'This Week', range: '27 Jul 2026 - 28 Jul 2026', onChange: () => draw() });
+        holder.appendChild(fr.bar);
+
+        if (state.senti === 'exec') {
+          const d = API.sentimentExecutivePulse();
+          // Card 1 — Sentiment Score Trend
+          const c1 = el('<section class="sa-card"></section>');
+          c1.appendChild(el(`<h4 class="sa-h4">Sentiment Score Trend <span class="sa-info" title="Aggregated sentiment score">ⓘ</span></h4>`));
+          const g1 = el('<div class="sa-agg-grid"></div>');
+          g1.appendChild(el(`<div class="sa-senti-col">
+            <div class="sa-huge">${d.score.toFixed(1)}</div>
+            <div class="sa-neutral-chip">${d.label} <span class="muted">☺</span></div>
+            <div class="sa-delta">↗ ${d.delta}</div>
+            <div class="muted sa-sub">${d.vsLabel}</div></div>`));
+          const b1 = el('<div class="chart" style="height:340px"></div>'); g1.appendChild(b1);
+          c1.appendChild(g1); holder.appendChild(c1);
+          Charts.sentimentBands(b1, d.trend, d.bands);
+
+          // Card 2 — Customer Sentiment Contribution
+          const c2 = el('<section class="sa-card"></section>');
+          c2.appendChild(el('<h4 class="sa-h4">Customer Sentiment Contribution</h4>'));
+          const g2 = el('<div class="sa-agg-grid"></div>');
+          const pieBox = el('<div class="chart" style="height:300px"></div>');
+          const stkBox = el('<div class="chart" style="height:300px"></div>');
+          g2.appendChild(pieBox); g2.appendChild(stkBox);
+          c2.appendChild(g2); holder.appendChild(c2);
+          Charts.contributionPie(pieBox, d.contribution.pie);
+          Charts.contributionStacked(stkBox, d.contribution);
+
+          // Card 3 — Top 5 Aspects Driving Sentiment
+          const c3 = el('<section class="sa-card"></section>');
+          c3.appendChild(el('<h4 class="sa-h4">Top 5 Aspects Driving Sentiment</h4>'));
+          const g3 = el('<div class="sa-aspects"></div>');
+          g3.appendChild(aspectCol('Most Negative Aspects', 'neg', d.aspects.negative, '#ef4444'));
+          g3.appendChild(aspectCol('Most Positive Aspects', 'pos', d.aspects.positive, '#22c55e'));
+          c3.appendChild(g3); holder.appendChild(c3);
+        } else {
+          const d = API.sentimentVoiceOfCustomer();
+          const c = el('<section class="sa-card"></section>');
+          c.appendChild(el('<h4 class="sa-h4">Customer Feedback</h4>'));
+          const cloud = el('<div class="sa-themes"></div>');
+          d.themes.forEach(t => cloud.appendChild(el(`<span class="sa-theme" style="font-size:${t.size}px">${t.theme}<span class="sa-theme-n">${t.count}</span></span>`)));
+          c.appendChild(cloud); holder.appendChild(c);
+          d.feedback.forEach(f => {
+            const col = f.score >= 81 ? '#16a34a' : f.score >= 61 ? '#22c55e' : f.score >= 41 ? '#f59e0b' : f.score >= 21 ? '#ef4444' : '#991b1b';
+            holder.appendChild(el(`<section class="sa-card sa-fb">
+              <div class="sa-fb-score">${f.score}</div>
+              <div>
+                <span class="sa-fb-label" style="background:${col}1f;color:${col}">${f.label} ☺</span>
+                <div class="sa-fb-q"><b>Comment:</b> ${f.question}</div>
+                <div class="muted sa-fb-a">${f.body}</div>
+                <button class="sa-ai">✨ AI Summary</button>
+              </div>
+              <div class="sa-fb-side"><button class="sa-outline">View Survey</button>
+                <div class="muted sa-sub" style="margin-top:18px">Created: <b>${f.date}</b></div></div></section>`));
+          });
+        }
+      }
+    }
+    function aspectCol(title, cls, items, color) {
+      const c = el(`<div><div class="sa-aspect-head ${cls}">${cls === 'neg' ? '👎' : '👍'} ${title}</div></div>`);
+      const max = Math.max.apply(null, items.map(i => i.score)) || 100;
+      items.forEach(i => c.appendChild(el(`<div class="sa-aspect">
+        <div class="sa-aspect-top"><span>${i.aspect}</span><span><b style="color:${color}">${i.score}</b> <span class="muted">• ${i.label}</span></span></div>
+        <div class="sa-aspect-bar"><i style="width:${Math.max(3, i.score / max * 100)}%;background:${color}"></i></div>
+        <div class="sa-aspect-n muted">${i.n}</div></div>`)));
+      return c;
+    }
+
+    // =========================================================================
+    // 3. Area Of Improvements
+    // =========================================================================
+    function renderImprove(host) {
+      host.appendChild(subTabs([{ k: 'improve', label: 'Things To Improve' }, { k: 'appreciation', label: 'Appreciation' }],
+        state.improve, k => { state.improve = k; draw(); }));
+      const holder = el('<div></div>'); host.appendChild(holder);
+      draw();
+
+      function draw() {
+        holder.innerHTML = '';
+        const vs = { shown: 5, search: '', dir: -1 };
+        const fr = filterRow({ search: true, onChange: st => { vs.search = st.search || ''; vs.shown = 5; paintCard(); } });
+        holder.appendChild(fr.bar);
+        const d = API.improvements(state.improve);
+        const c = el('<section class="sa-card"></section>');
+        c.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any brand to drill down to countries, states, zones and stores.</div>`));
+        c.appendChild(el(`<div><b>Business Units</b><div class="muted sa-sub">Total Surveys Generated: ${d.totalSurveys}&nbsp;&nbsp;Responses Received: ${d.responses}</div></div>`));
+        c.appendChild(el(`<div class="sa-legend">${d.categories.map(([n, col]) => `<span class="sa-legend-item"><i class="sa-dot" style="background:${col}"></i>${n}</span>`).join('')}</div>`));
+        const canvas = el('<div></div>');
+        c.appendChild(canvas); holder.appendChild(c);
+        paintCard();
+
+        function paintCard() {
+          canvas.innerHTML = '';
+          let rows = vs.search ? d.rows.filter(r => r.name.toLowerCase().indexOf(vs.search.toLowerCase()) >= 0) : d.rows.slice();
+          rows.sort((a, b) => (a.total - b.total) * vs.dir);
+          const show = rows.slice(0, vs.shown);
+          const box = el(`<div class="chart" style="height:${Math.max(200, show.length * 34 + 90)}px"></div>`);
+          canvas.appendChild(box);
+          Charts.stackedH(box, { categories: d.categories, brands: show.map(r => r.name),
+            values: show.reduce((m, r) => { m[r.name] = r.values; return m; }, {}), totals: show.map(r => r.total) });
+          if (rows.length > vs.shown) {
+            const remaining = rows.length - vs.shown;
+            const more = el(`<div class="sa-loadmore">
+              <button class="sa-outline sa-more">Load More (${Math.min(5, remaining)} more)</button>
+              <button class="sa-linkbtn sa-all">Show All (${remaining} remaining)</button>
+              <div class="muted sa-sub">${vs.shown} of ${rows.length} entries shown</div></div>`);
+            $('.sa-more', more).addEventListener('click', () => { vs.shown = Math.min(rows.length, vs.shown + 5); paintCard(); requestAnimationFrame(() => Charts.resizeAll()); });
+            $('.sa-all', more).addEventListener('click', () => { vs.shown = rows.length; paintCard(); requestAnimationFrame(() => Charts.resizeAll()); });
+            canvas.appendChild(more);
+          }
+          requestAnimationFrame(() => Charts.resizeAll());
+        }
+      }
+    }
+
+    // =========================================================================
+    // 4. Metrics Comparison
+    // =========================================================================
+    function renderCompare(host) {
+      const METRICS = { 'NPS (Net Promoter Score)': 'NPS', 'CSAT (Customer Satisfaction)': 'CSAT', 'CES (Customer Effort Score)': 'CES', 'RATING (Overall Rating)': 'RATING' };
+      const cmp = { metricLabel: 'NPS (Net Promoter Score)', brands: ['HALDIRAM MARKETING PVT. LTD. - HEFPL', 'Haldiram UAE'] };
+      const holder = el('<div></div>'); host.appendChild(holder);
+      draw();
+      function draw() {
+        holder.innerHTML = '';
+        const fr = filterRow({ onChange: () => draw() });
+        holder.appendChild(fr.bar);
+        const pick = el('<div class="sa-picker-grid"></div>');
+        const l = el('<div><label class="sa-plabel">Select Matric</label></div>');
+        l.appendChild(U.selectEl(cmp.metricLabel, Object.keys(METRICS), cmp.metricLabel, v => { cmp.metricLabel = v; draw(); }));
+        const r = el('<div><label class="sa-plabel">Select Brands to Compare (max 10)</label></div>');
+        r.appendChild(U.selectEl(cmp.brands.join(', '), API.brandNames.slice(0, 20), cmp.brands[0], v => {
+          const i = cmp.brands.indexOf(v);
+          if (i >= 0) { if (cmp.brands.length > 1) cmp.brands.splice(i, 1); }
+          else if (cmp.brands.length < 10) cmp.brands.push(v);
+          draw();
+        }));
+        pick.appendChild(l); pick.appendChild(r); holder.appendChild(pick);
+
+        const palette = ['#2563eb', '#22c55e', '#a855f7', '#f59e0b', '#ec4899', '#06b6d4', '#ef4444', '#14b8a6', '#8b5cf6', '#f97316'];
+        const chips = el(`<div><div class="sa-sub" style="font-weight:600">Selected Brands (${cmp.brands.length})</div><div class="sa-chip-row"></div></div>`);
+        const cr = $('.sa-chip-row', chips);
+        cmp.brands.forEach((b, i) => {
+          const chip = el(`<span class="sa-brandchip" style="background:${palette[i % palette.length]}">${b} <span class="sa-brandchip-x">⊗</span></span>`);
+          chip.querySelector('.sa-brandchip-x').addEventListener('click', () => { if (cmp.brands.length > 1) { cmp.brands.splice(i, 1); draw(); } });
+          cr.appendChild(chip);
+        });
+        holder.appendChild(chips);
+
+        const key = METRICS[cmp.metricLabel];
+        const md = API.metricsComparison(key, cmp.brands);
+        const c = el('<section class="sa-card"></section>');
+        c.appendChild(el(`<div class="sa-cmp-title">${key} Trends Comparison</div>`));
+        c.appendChild(el(`<div class="muted sa-sub">Comparing ${cmp.brands.length} brands over ${fr.st.period}</div>`));
+        const box = el('<div class="chart" style="height:380px"></div>');
+        c.appendChild(box);
+        // band legend footer
+        c.appendChild(el(`<div class="sa-bandfoot">${API.BAND_COLORS.map(b => `<div class="sa-bandfoot-i"><div class="muted">${b.short}</div><div><i class="sa-dot" style="background:${b.color}"></i> <b>${b.range}</b></div></div>`).join('')}</div>`));
+        holder.appendChild(c);
+        Charts.compareLines(box, md.dates, md.series, md.min, md.max);
+      }
+    }
+
+    // =========================================================================
+    // 5. Channel Analysis — 3 cards
+    // =========================================================================
+    function renderChannel(host) {
+      const vs = { view: 'bar' };
+      const holder = el('<div></div>'); host.appendChild(holder);
+      draw();
+      function draw() {
+        holder.innerHTML = '';
+        const fr = filterRow({ channel: true, brand: true, onChange: () => draw() });
+        holder.appendChild(fr.bar);
+        const d = API.channelAnalysis();
+
+        // Card 1 — Channel Overview
+        const c1 = el('<section class="sa-card"></section>');
+        const h1 = el(`<div class="card-head" style="margin-bottom:8px"><div class="sa-h4" style="margin:0">Channel Overview</div><div class="right"></div></div>`);
+        const barT = el('<button class="sa-tool sa-tool-active" title="Bar">▥</button>');
+        const lineT = el('<button class="sa-tool" title="Line">📈</button>');
+        $('.right', h1).appendChild(barT); $('.right', h1).appendChild(lineT);
+        c1.appendChild(h1);
+        const b1 = el('<div class="chart" style="height:420px"></div>');
+        c1.appendChild(b1); holder.appendChild(c1);
+        const paint1 = () => Charts.channelStacked(b1, d.dates, d.overview, vs.view === 'line');
+        barT.addEventListener('click', () => { vs.view = 'bar'; barT.classList.add('sa-tool-active'); lineT.classList.remove('sa-tool-active'); paint1(); });
+        lineT.addEventListener('click', () => { vs.view = 'line'; lineT.classList.add('sa-tool-active'); barT.classList.remove('sa-tool-active'); paint1(); });
+        paint1();
+
+        // Card 2 — Survey Channel Communication Journey
+        const c2 = el('<section class="sa-card"></section>');
+        c2.appendChild(el('<div class="sa-h4">Survey Channel Communication Journey</div>'));
+        const b2 = el('<div class="chart" style="height:360px"></div>');
+        c2.appendChild(b2); holder.appendChild(c2);
+        Charts.journeyBars(b2, d.journey);
+
+        // Card 3 — Survey Submissions by Channel
+        const c3 = el('<section class="sa-card"></section>');
+        c3.appendChild(el('<div class="sa-h4">Survey Submissions by Channel</div>'));
+        const b3 = el('<div class="chart" style="height:320px"></div>');
+        c3.appendChild(b3); holder.appendChild(c3);
+        Charts.submissionsDonut(b3, d.submissions);
+      }
+    }
+
+    // =========================================================================
+    // 6. Time Intelligence — time-of-day / day-of-week analysis
+    //    Same data engine (MockApi.TimeIntel) rendered in Survey Analytics'
+    //    visual language: sa-card / sa-h4 / sa-filters / sa-tool / sa-modal.
+    // =========================================================================
+    function renderTimeIntel(host) {
+      const TI = API.TimeIntel;
+      if (!TI) { host.appendChild(el('<section class="sa-card"><div class="empty"><div class="big">Time Intelligence engine not loaded.</div></div></section>')); return; }
+      let slots = TI.getSlots();
+      const mainF = { scope: 'Overall', entity: null, period: 'This Month' };
+      const wwF = { scope: 'Overall', entity: null, period: 'This Month' };
+      const vs = { slotView: 'table', wwView: 'table', sortKey: 'nps', sortDir: -1 };
+      const npsCol = v => v >= 50 ? '#22c55e' : v >= 1 ? '#f59e0b' : '#ef4444';
+      const arrow = t => t > 1 ? `<span style="color:#22c55e">+${t}% ↗</span>` : t < -1 ? `<span style="color:#ef4444">${t}% ↘</span>` : `<span class="muted">0%</span>`;
+
+      // Scope + Entity filter: Overall | Brand | Country. Picking Brand/Country
+      // reveals a second dropdown listing that dimension's options.
+      function scopeEntityControl(state, onChange) {
+        const wrap = el('<div style="display:flex;gap:8px;"></div>');
+        function paint() {
+          wrap.innerHTML = '';
+          wrap.appendChild(U.selectEl(state.scope, ['Overall', 'Brand', 'Country'], state.scope, v => {
+            state.scope = v;
+            state.entity = v === 'Brand' ? API.brandNames[0] : v === 'Country' ? TI.countryList[0] : null;
+            paint(); onChange();
+          }));
+          if (state.scope === 'Brand') wrap.appendChild(U.selectEl(state.entity, API.brandNames, state.entity, v => { state.entity = v; onChange(); }));
+          else if (state.scope === 'Country') wrap.appendChild(U.selectEl(state.entity, TI.countryList, state.entity, v => { state.entity = v; onChange(); }));
+        }
+        paint();
+        return wrap;
+      }
+      // "Custom" is encoded as 'Custom:<days>' so every TI.* call that takes a
+      // single period string keeps working unchanged.
+      function effectivePeriod(state) { return state.period === 'Custom' ? 'Custom:' + TI.daysBetween(state.customFrom, state.customTo) : state.period; }
+      // Period filter + its date-range readout; picking Custom swaps the
+      // readout for two date inputs.
+      function periodRangeControl(state, onChange) {
+        const wrap = el('<div style="display:flex;align-items:center;gap:8px;"></div>');
+        function paint() {
+          wrap.innerHTML = '';
+          wrap.appendChild(U.selectEl(state.period, TI.PERIODS, state.period, v => {
+            state.period = v;
+            if (v === 'Custom' && !state.customFrom) { const r = TI.periodRange('Last 7 Days'); state.customFrom = TI.fmtISO(r[0]); state.customTo = TI.fmtISO(r[1]); }
+            paint(); onChange();
+          }));
+          if (state.period === 'Custom') {
+            const fromI = el(`<input type="date" class="sa-search" style="min-width:0" value="${state.customFrom}"/>`);
+            const toI = el(`<input type="date" class="sa-search" style="min-width:0" value="${state.customTo}"/>`);
+            fromI.addEventListener('change', () => { state.customFrom = fromI.value; onChange(); });
+            toI.addEventListener('change', () => { state.customTo = toI.value; onChange(); });
+            wrap.appendChild(fromI); wrap.appendChild(el('<span class="muted">to</span>')); wrap.appendChild(toI);
+          } else {
+            const [from, to] = TI.periodRange(state.period);
+            wrap.appendChild(el(`<div class="sa-daterange">${TI.formatRange(from, to)}</div>`));
+          }
+        }
+        paint();
+        return wrap;
+      }
+
+      // ---- header: title + ⚙ Slots -----------------------------------------
+      const hdr = el('<section class="sa-card sa-ti-hdr"></section>');
+      const hrow = el(`<div class="card-head" style="margin-bottom:0"><div class="sa-h4" style="margin:0">⏰ Time-Based Analysis</div><div class="right"></div></div>`);
+      const gearBtn = el(`<button class="sa-tool sa-gear-btn" title="Configure time slots">⚙ Slots <span class="muted">(${slots.length})</span></button>`);
+      gearBtn.addEventListener('click', openSlotModal);
+      $('.right', hrow).appendChild(gearBtn);
+      hdr.appendChild(hrow);
+      const mainFilters = el('<div class="sa-filters"></div>');
+      mainFilters.appendChild(el('<span style="flex:1"></span>'));
+      mainFilters.appendChild(periodRangeControl(mainF, () => debounceMain()));
+      mainFilters.appendChild(scopeEntityControl(mainF, () => debounceMain()));
+      hdr.appendChild(mainFilters);
+      host.appendChild(hdr);
+
+      // ---- KPI strip -------------------------------------------------------
+      const kpiCard = el('<section class="sa-card"></section>');
+      const kpis = el('<div class="sa-ti-kpis"></div>');
+      kpiCard.appendChild(kpis);
+      host.appendChild(kpiCard);
+
+      // ---- NPS by Time Slot (Table ⇄ Chart) --------------------------------
+      const slotCard = el('<section class="sa-card"></section>');
+      const sHead = el(`<div class="card-head" style="margin-bottom:8px"><div class="sa-h4" style="margin:0">NPS by Time Slot</div><div class="right"></div></div>`);
+      const tblT = el('<button class="sa-tool sa-tool-active" title="Table">☰</button>');
+      const chtT = el('<button class="sa-tool" title="Chart">▥</button>');
+      tblT.addEventListener('click', () => { vs.slotView = 'table'; tblT.classList.add('sa-tool-active'); chtT.classList.remove('sa-tool-active'); drawSlots(); });
+      chtT.addEventListener('click', () => { vs.slotView = 'chart'; chtT.classList.add('sa-tool-active'); tblT.classList.remove('sa-tool-active'); drawSlots(); });
+      $('.right', sHead).appendChild(tblT); $('.right', sHead).appendChild(chtT);
+      slotCard.appendChild(sHead);
+      slotCard.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any time slot to drill down to brands, countries, states, zones and stores.</div>`));
+      const slotBody = el('<div></div>');
+      slotCard.appendChild(slotBody);
+      host.appendChild(slotCard);
+
+      // ---- Heatmap ---------------------------------------------------------
+      const hmCard = el('<section class="sa-card"></section>');
+      hmCard.appendChild(el('<div class="sa-h4">NPS Heatmap — Slots × Day of Week</div>'));
+      hmCard.appendChild(el(`<div class="muted sa-sub" style="margin-bottom:10px">Each cell is one time slot on one day of the week. Cells below the 30-response threshold show “–”.</div>`));
+      const hmBody = el('<div></div>');
+      hmCard.appendChild(hmBody);
+      host.appendChild(hmCard);
+
+      // ---- Weekday vs Weekend (own filter + ⚙) -----------------------------
+      const wwCard = el('<section class="sa-card"></section>');
+      const wHead = el(`<div class="card-head" style="margin-bottom:6px"><div class="sa-h4" style="margin:0">Weekday vs Weekend</div><div class="right"></div></div>`);
+      const wTblT = el('<button class="sa-tool sa-tool-active" title="Table">☰</button>');
+      const wChtT = el('<button class="sa-tool" title="Chart">▥</button>');
+      wTblT.addEventListener('click', () => { vs.wwView = 'table'; wTblT.classList.add('sa-tool-active'); wChtT.classList.remove('sa-tool-active'); drawWW(); });
+      wChtT.addEventListener('click', () => { vs.wwView = 'chart'; wChtT.classList.add('sa-tool-active'); wTblT.classList.remove('sa-tool-active'); drawWW(); });
+      const wGear = el('<button class="sa-tool" title="Configure weekend days">⚙ Weekend days</button>');
+      wGear.addEventListener('click', openWeekendModal);
+      $('.right', wHead).appendChild(wTblT); $('.right', wHead).appendChild(wChtT); $('.right', wHead).appendChild(wGear);
+      wwCard.appendChild(wHead);
+      wwCard.appendChild(el('<div class="muted sa-sub">Uses its own filters — independent of the section above.</div>'));
+      const wwFilters = el('<div class="sa-filters"></div>');
+      wwFilters.appendChild(el('<span style="flex:1"></span>'));
+      wwFilters.appendChild(periodRangeControl(wwF, () => debounceWW()));
+      wwFilters.appendChild(scopeEntityControl(wwF, () => debounceWW()));
+      wwCard.appendChild(wwFilters);
+      const wwBody = el('<div></div>');
+      wwCard.appendChild(wwBody);
+      host.appendChild(wwCard);
+
+      // ---- render pipeline -------------------------------------------------
+      let mt = null, wt = null;
+      function debounceMain() { clearTimeout(mt); slotBody.innerHTML = ''; slotBody.appendChild(skel(240)); hmBody.innerHTML = ''; hmBody.appendChild(skel(320)); mt = setTimeout(drawMain, 260); }
+      function debounceWW() { clearTimeout(wt); wwBody.innerHTML = ''; wwBody.appendChild(skel(200)); wt = setTimeout(drawWW, 260); }
+      const skel = h => el(`<div class="sa-skel" style="height:${h}px"></div>`);
+
+      function drawMain() {
+        if (!slots.length) { kpis.innerHTML = ''; slotBody.innerHTML = ''; slotBody.appendChild(noSlots()); hmBody.innerHTML = ''; hmBody.appendChild(noSlots()); return; }
+        const d = TI.aggregateAll(slots, mainF.scope, mainF.entity, effectivePeriod(mainF));
+        const ov = d.overview;
+        kpis.innerHTML = '';
+        [['Overall NPS', ov.overallNps, npsCol(ov.overallNps)], ['Total Responses', fmt(ov.totalVolume), null],
+         ['Best Slot', ov.best ? ov.best.name : '—', '#22c55e', ov.best ? 'NPS ' + ov.best.nps : ''],
+         ['Lowest Slot', ov.worst ? ov.worst.name : '—', '#ef4444', ov.worst ? 'NPS ' + ov.worst.nps : '']]
+          .forEach(([l, v, c, sub]) => kpis.appendChild(el(`<div class="sa-ti-kpi"><div class="sa-ti-kpi-l">${l}</div><div class="sa-ti-kpi-v" ${c ? `style="color:${c}"` : ''}>${v}</div>${sub ? `<div class="muted sa-sub">${sub}</div>` : ''}</div>`)));
+        drawSlots(ov.metrics);
+        // heatmap
+        hmBody.innerHTML = '';
+        const hb = el(`<div class="chart" style="height:${Math.max(280, d.heatmap.length * 54 + 90)}px"></div>`);
+        hmBody.appendChild(hb);
+        Charts.heatmap(hb, d.heatmap);
+        requestAnimationFrame(() => Charts.resizeAll());
+      }
+
+      function drawSlots(metrics) {
+        metrics = metrics || TI.slotMetrics(slots, mainF.scope, mainF.entity, effectivePeriod(mainF));
+        slotBody.innerHTML = '';
+        if (vs.slotView === 'chart') {
+          const b = el('<div class="chart" style="height:360px"></div>');
+          slotBody.appendChild(b);
+          Charts.npsVolume(b, metrics);
+        } else {
+          const rows = metrics.slice().sort((a, b) => (a[vs.sortKey] - b[vs.sortKey]) * vs.sortDir);
+          const th = (k, l) => `<th class="ta-r sa-sortable" data-k="${k}">${l}${vs.sortKey === k ? (vs.sortDir < 0 ? ' ▾' : ' ▴') : ''}</th>`;
+          const t = el(`<table class="table sa-table"><thead><tr><th>Time Slot</th><th>Window</th>${th('nps', 'NPS')}${th('volume', 'Responses')}<th class="ta-r">vs prev</th><th class="ta-r">Detractor %</th></tr></thead><tbody></tbody></table>`);
+          const tb = $('tbody', t);
+          rows.forEach(m => {
+            const cell = m.lowSample ? '<span class="sa-lowpill">Low sample</span>' : `<span style="color:${npsCol(m.nps)};font-weight:600">${m.nps}</span>`;
+            const tr = el(`<tr class="sa-rowlink" tabindex="0"><td><b>${m.name}</b></td><td class="muted">${m.start}–${m.end}</td>
+              <td class="ta-r">${cell}</td><td class="ta-r">${fmt(m.volume)}</td>
+              <td class="ta-r">${m.lowSample ? '—' : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? '—' : m.detractorPct + '%'}</td></tr>`);
+            tr.addEventListener('click', () => openDrill(m.id));
+            tr.addEventListener('keydown', e => { if (e.key === 'Enter') openDrill(m.id); });
+            tb.appendChild(tr);
+          });
+          t.querySelectorAll('.sa-sortable').forEach(h => h.addEventListener('click', () => {
+            const k = h.dataset.k; if (vs.sortKey === k) vs.sortDir *= -1; else { vs.sortKey = k; vs.sortDir = -1; }
+            drawSlots(metrics);
+          }));
+          slotBody.appendChild(t);
+        }
+        requestAnimationFrame(() => Charts.resizeAll());
+      }
+
+      function drawWW() {
+        if (!slots.length) { wwBody.innerHTML = ''; wwBody.appendChild(noSlots()); return; }
+        const wk = TI.getWeekendDays();
+        const metrics = TI.slotMetrics(slots, wwF.scope, wwF.entity, effectivePeriod(wwF));
+        const npsA = a => a.n ? Math.round(a.p / a.n * 100) - Math.round(a.d / a.n * 100) : 0;
+        const rows = metrics.map(m => {
+          const wd = { n: 0, p: 0, d: 0 }, we = { n: 0, p: 0, d: 0 };
+          m.perDay.forEach((a, day) => { const t2 = wk.indexOf(day) >= 0 ? we : wd; t2.n += a.n; t2.p += a.p; t2.d += a.d; });
+          return { name: m.name, start: m.start, end: m.end, wd, we,
+            lowWeekday: wd.n < TI.MIN_SAMPLE, lowWeekend: we.n < TI.MIN_SAMPLE,
+            weekdayNps: wd.n ? npsA(wd) : null, weekendNps: we.n ? npsA(we) : null };
+        });
+        wwBody.innerHTML = '';
+        if (vs.wwView === 'chart') {
+          const b = el('<div class="chart" style="height:320px"></div>');
+          wwBody.appendChild(b);
+          Charts.wwBars(b, rows);
+        } else {
+          const t = el(`<table class="table sa-table"><thead>
+            <tr><th rowspan="2">Time Slot</th><th colspan="2" class="sa-grp">Weekday</th><th colspan="2" class="sa-grp">Weekend</th><th rowspan="2" class="ta-r">Δ</th></tr>
+            <tr><th class="ta-r sa-sub2">NPS</th><th class="ta-r sa-sub2">Responses</th><th class="ta-r sa-sub2">NPS</th><th class="ta-r sa-sub2">Responses</th></tr>
+            </thead><tbody></tbody></table>`);
+          const tb = $('tbody', t);
+          const tot = { wd: { n: 0, p: 0, d: 0 }, we: { n: 0, p: 0, d: 0 } };
+          rows.forEach(r => {
+            ['n', 'p', 'd'].forEach(k => { tot.wd[k] += r.wd[k]; tot.we[k] += r.we[k]; });
+            const dl = (r.lowWeekday || r.lowWeekend) ? null : r.weekendNps - r.weekdayNps;
+            const c = (nps, low) => low ? '<span class="sa-lowpill">Low</span>' : `<span style="color:${npsCol(nps)};font-weight:600">${nps}</span>`;
+            tb.appendChild(el(`<tr><td><b>${r.name}</b><div class="muted sa-sub">${r.start}–${r.end}</div></td>
+              <td class="ta-r">${c(r.weekdayNps, r.lowWeekday)}</td><td class="ta-r">${fmt(r.wd.n)}</td>
+              <td class="ta-r">${c(r.weekendNps, r.lowWeekend)}</td><td class="ta-r">${fmt(r.we.n)}</td>
+              <td class="ta-r">${dl === null ? '—' : `<b style="color:${dl >= 0 ? '#22c55e' : '#ef4444'}">${dl > 0 ? '+' : ''}${dl}</b>`}</td></tr>`));
+          });
+          const dT = (tot.wd.n && tot.we.n) ? npsA(tot.we) - npsA(tot.wd) : 0;
+          tb.appendChild(el(`<tr class="sa-totalrow"><td><b>All slots</b></td>
+            <td class="ta-r"><b style="color:${npsCol(npsA(tot.wd))}">${npsA(tot.wd)}</b></td><td class="ta-r"><b>${fmt(tot.wd.n)}</b></td>
+            <td class="ta-r"><b style="color:${npsCol(npsA(tot.we))}">${npsA(tot.we)}</b></td><td class="ta-r"><b>${fmt(tot.we.n)}</b></td>
+            <td class="ta-r"><b style="color:${dT >= 0 ? '#22c55e' : '#ef4444'}">${dT > 0 ? '+' : ''}${dT}</b></td></tr>`));
+          wwBody.appendChild(t);
+        }
+        requestAnimationFrame(() => Charts.resizeAll());
+      }
+
+      function noSlots() {
+        const e = el(`<div class="empty"><div class="big">No time slots configured</div><div>Open ⚙ Slots to create time slots.</div>
+          <div style="margin-top:14px"><button class="sa-outline sa-cfg">⚙ Configure slots</button></div></div>`);
+        $('.sa-cfg', e).addEventListener('click', openSlotModal);
+        return e;
+      }
+
+      // ---- settings modals (sa-styled) -------------------------------------
+      function modal(title, width) {
+        const ov = el('<div class="sa-overlay"></div>');
+        const m = el(`<div class="sa-modal" ${width ? `style="width:${width}px"` : ''} role="dialog" aria-label="${title}"></div>`);
+        m.appendChild(el(`<div class="card-head"><div class="sa-h4" style="margin:0">${title}</div><div class="right"><button class="sa-tool sa-x" aria-label="Close">✕</button></div></div>`));
+        const close = () => { ov.remove(); m.remove(); document.removeEventListener('keydown', esc); };
+        const esc = e => { if (e.key === 'Escape') close(); };
+        ov.addEventListener('click', close); $('.sa-x', m).addEventListener('click', close);
+        document.addEventListener('keydown', esc);
+        document.body.appendChild(ov); document.body.appendChild(m);
+        return { m, close };
+      }
+      function openSlotModal() {
+        const { m } = modal('⚙ Slot Configuration', 760);
+        m.appendChild(el('<div class="muted sa-sub" style="margin-bottom:12px">Define custom time slots (persisted). Editing re-maps all data and refreshes every view.</div>'));
+        const tl = el('<div></div>'), list = el('<div class="sa-slotlist"></div>'), err = el('<div class="sa-err" style="display:none"></div>');
+        m.appendChild(tl); m.appendChild(list); m.appendChild(err);
+        const add = el(`<div class="sa-addrow"><input class="sa-search" id="sn" placeholder="Slot name" style="min-width:150px"/>
+          <input class="sa-search" id="ss" type="time" value="08:00"/><span class="muted">to</span><input class="sa-search" id="se" type="time" value="12:00"/>
+          <button class="sa-outline" id="sa-add">Add slot</button></div>`);
+        m.appendChild(add);
+        function redraw() {
+          tl.innerHTML = ''; tl.appendChild(timeline(slots));
+          list.innerHTML = '';
+          slots.forEach(s => {
+            const row = el(`<div class="sa-slotrow"><input class="sa-search f-n" value="${s.name}"/>
+              <input class="sa-search f-s" type="time" value="${s.start}"/><span class="muted">–</span><input class="sa-search f-e" type="time" value="${s.end}"/>
+              <span class="muted sa-dur"></span><span style="flex:1"></span>
+              <button class="sa-linkbtn f-save">Save</button><button class="sa-linkbtn f-del" style="color:#ef4444">Delete</button>
+              <div class="sa-err f-err" style="display:none;flex-basis:100%"></div></div>`);
+            const upd = () => $('.sa-dur', row).textContent = dur($('.f-s', row).value, $('.f-e', row).value);
+            upd(); ['.f-s', '.f-e'].forEach(q => $(q, row).addEventListener('input', upd));
+            $('.f-save', row).addEventListener('click', () => {
+              const nx = { id: s.id, name: $('.f-n', row).value.trim() || s.name, start: $('.f-s', row).value, end: $('.f-e', row).value };
+              const e2 = validate(slots.filter(x => x.id !== s.id), nx);
+              if (e2) { $('.f-err', row).textContent = e2; $('.f-err', row).style.display = ''; return; }
+              slots = slots.map(x => x.id === s.id ? nx : x); TI.saveSlots(slots); redraw(); refreshAll();
+            });
+            $('.f-del', row).addEventListener('click', () => { slots = slots.filter(x => x.id !== s.id); TI.saveSlots(slots); redraw(); refreshAll(); });
+            list.appendChild(row);
+          });
+        }
+        $('#sa-add', add).addEventListener('click', () => {
+          const nx = { id: 's' + Date.now(), name: $('#sn', add).value.trim() || 'New slot', start: $('#ss', add).value, end: $('#se', add).value };
+          const e2 = validate(slots, nx);
+          if (e2) { err.textContent = e2; err.style.display = ''; return; }
+          err.style.display = 'none'; $('#sn', add).value = '';
+          slots = slots.concat([nx]); TI.saveSlots(slots); redraw(); refreshAll();
+        });
+        redraw();
+      }
+      function openWeekendModal() {
+        const { m } = modal('⚙ Weekend Days', 440);
+        m.appendChild(el('<div class="muted sa-sub" style="margin-bottom:14px">Select which days count as weekend.</div>'));
+        const g = el('<div class="sa-chip-row"></div>'); m.appendChild(g);
+        (function paintChips() {
+          g.innerHTML = '';
+          const wkd = TI.getWeekendDays();
+          TI.DOW.forEach((dn, i) => {
+            const on = wkd.indexOf(i) >= 0;
+            const c = el(`<button class="sa-daychip ${on ? 'on' : ''}" aria-pressed="${on}">${dn}</button>`);
+            c.addEventListener('click', () => { const cur = TI.getWeekendDays().slice(); const ix = cur.indexOf(i); if (ix >= 0) cur.splice(ix, 1); else cur.push(i); TI.saveWeekendDays(cur); paintChips(); drawWW(); });
+            g.appendChild(c);
+          });
+        })();
+      }
+      function refreshAll() { gearBtn.innerHTML = `⚙ Slots <span class="muted">(${slots.length})</span>`; drawMain(); drawWW(); }
+
+      function timeline(sl) {
+        const w = el('<div class="sa-timeline"></div>');
+        const cols = ['#7C3AED', '#f59e0b', '#22c55e', '#06b6d4', '#a855f7', '#ef4444', '#5B21B6'];
+        sl.forEach((s, i) => cover(s).forEach(b => { const g = el('<div class="sa-tl-seg"></div>'); g.style.left = (b / 48 * 100) + '%'; g.style.width = (1 / 48 * 100) + '%'; g.style.background = cols[i % cols.length]; g.title = s.name; w.appendChild(g); }));
+        [0, 6, 12, 18, 24].forEach(h => w.appendChild(el(`<div class="sa-tl-tick" style="left:${h / 24 * 100}%">${h}:00</div>`)));
+        return w;
+      }
+      const mins = t => { const [h, m2] = t.split(':').map(Number); return h * 60 + m2; };
+      function cover(s) { let a = Math.floor(mins(s.start) / 30), b = Math.floor(mins(s.end) / 30), o = []; if (b > a) { for (let i = a; i < b; i++) o.push(i); } else { for (let i = a; i < 48; i++) o.push(i); for (let i = 0; i < b; i++) o.push(i); } return o; }
+      function dur(a, b) { let d = mins(b) - mins(a); if (d <= 0) d += 1440; return Math.floor(d / 60) + 'h ' + (d % 60) + 'm'; }
+      function validate(others, s) {
+        if (!s.start || !s.end) return 'Start and end are required.';
+        let d = mins(s.end) - mins(s.start); if (d <= 0) d += 1440;
+        if (mins(s.start) === mins(s.end)) return 'End must differ from start.';
+        if (d < 30) return 'Slot must be at least 30 minutes.';
+        const mine = new Set(cover(s));
+        for (const o of others) if (cover(o).some(b => mine.has(b))) return `Overlaps with “${o.name}” (${o.start}–${o.end}).`;
+        return null;
+      }
+
+      // ---- drill-down (sa-styled side panel) --------------------------------
+      // Full hierarchy: Brand -> Country -> State -> Zone -> Store, anchored
+      // to the slot(+day) that was clicked. drillPath grows as rows are
+      // clicked; a breadcrumb (built from the top Scope filter + drillPath)
+      // lets you jump back up without closing the drawer.
+      function openDrill(slotId, dayName) {
+        const dd = TI.drilldown(slots, mainF.scope, mainF.entity, effectivePeriod(mainF), slotId, dayName);
+        if (!dd) return;
+        let drillPath = [];
+        const ov = el('<div class="sa-overlay"></div>');
+        const p = el(`<div class="sa-drawer" role="dialog" aria-label="Drill-down"></div>`);
+        p.appendChild(el(`<div class="card-head"><div class="sa-h4" style="margin:0">${dd.scope}</div><div class="right"><button class="sa-tool sa-x" aria-label="Close">✕</button></div></div>`));
+        const crumb = el('<div class="sa-sub" style="margin-bottom:10px"></div>');
+        const body = el('<div></div>');
+        p.appendChild(crumb); p.appendChild(body);
+        document.body.appendChild(ov); document.body.appendChild(p);
+        const close = () => { ov.remove(); p.remove(); };
+        ov.addEventListener('click', close); $('.sa-x', p).addEventListener('click', close);
+
+        function crumbItems() {
+          const items = [];
+          if (mainF.scope === 'Country' && mainF.entity) {
+            items.push({ label: mainF.entity, path: [] });
+            if (drillPath.length >= 2) items.push({ label: drillPath[0], path: drillPath.slice(0, 2) });
+            for (let i = 2; i < drillPath.length; i++) items.push({ label: drillPath[i], path: drillPath.slice(0, i + 1) });
+          } else if (mainF.scope === 'Brand' && mainF.entity) {
+            items.push({ label: mainF.entity, path: [] });
+            for (let i = 1; i < drillPath.length; i++) items.push({ label: drillPath[i], path: drillPath.slice(0, i + 1) });
+          } else {
+            items.push({ label: 'All Brands', path: [] });
+            for (let i = 0; i < drillPath.length; i++) items.push({ label: drillPath[i], path: drillPath.slice(0, i + 1) });
+          }
+          return items;
+        }
+
+        function render() {
+          const items = crumbItems();
+          crumb.innerHTML = items.map((it, i) => i === items.length - 1
+            ? `<b>${it.label}</b>`
+            : `<a href="#" data-i="${i}" style="color:#2563eb;text-decoration:none">${it.label}</a> <span class="muted">›</span> `).join('');
+          crumb.querySelectorAll('a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); drillPath = items[+a.dataset.i].path.slice(); render(); }));
+
+          const at = drillPath.length ? TI.drillAt(mainF.scope, mainF.entity, drillPath, dd.hours, dd.dayIdx, effectivePeriod(mainF)) : { node: dd.node, children: dd.children };
+          body.innerHTML = '';
+          if (at.node.lowSample) {
+            body.appendChild(el(`<div class="empty"><div class="big">Low sample (${fmt(at.node.n)})</div><div>Below the ${TI.MIN_SAMPLE}-response threshold.</div></div>`));
+            return;
+          }
+          body.appendChild(el(`<div class="sa-ti-kpis" style="grid-template-columns:1fr 1fr">
+            <div class="sa-ti-kpi"><div class="sa-ti-kpi-l">NPS</div><div class="sa-ti-kpi-v" style="color:${npsCol(at.node.nps)}">${at.node.nps}</div></div>
+            <div class="sa-ti-kpi"><div class="sa-ti-kpi-l">Responses</div><div class="sa-ti-kpi-v">${fmt(at.node.n)}</div></div></div>`));
+          body.appendChild(el(`<div class="muted sa-sub" style="margin:10px 0">
+            <i class="sa-dot" style="background:#22c55e"></i> Promoters ${at.node.promoterPct}% (${at.node.promoter}) &nbsp;
+            <i class="sa-dot" style="background:#f59e0b"></i> Passives ${at.node.passivePct}% (${at.node.passive}) &nbsp;
+            <i class="sa-dot" style="background:#ef4444"></i> Detractors ${at.node.detractorPct}% (${at.node.detractor})</div>`));
+          body.appendChild(el(`<div class="sa-h4" style="margin-top:14px">${at.children.label}</div>`));
+          const table = el(`<table class="table sa-table"><thead><tr><th>${at.children.level}</th><th class="ta-r">Responses</th><th class="ta-r">NPS</th><th></th></tr></thead><tbody></tbody></table>`);
+          const tb = $('tbody', table);
+          at.children.rows.forEach(r => {
+            const nCell = r.lowSample ? '<span class="sa-lowpill">Low</span>' : `<span style="color:${npsCol(r.nps)};font-weight:600">${r.nps}</span>`;
+            const tr = el(`<tr class="${r.leaf ? '' : 'sa-rowlink'}" ${r.leaf ? '' : 'tabindex="0"'}><td>${r.name}</td><td class="ta-r">${fmt(r.n)}</td><td class="ta-r">${nCell}</td><td class="ta-r muted">${r.leaf ? '' : '›'}</td></tr>`);
+            if (!r.leaf) {
+              tr.addEventListener('click', () => { drillPath = r.path.slice(); render(); });
+              tr.addEventListener('keydown', e => { if (e.key === 'Enter') { drillPath = r.path.slice(); render(); } });
+            }
+            tb.appendChild(tr);
+          });
+          body.appendChild(table);
+        }
+        render();
+      }
+
+      drawMain(); drawWW();
+    }
+
+    paint();
+  }
+
+  global.SurveyAnalyticsModule = { render: render };
+})(window);

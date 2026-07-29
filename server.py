@@ -2,9 +2,9 @@
 """Tiny static server with no-cache headers so edits always show on reload."""
 import http.server
 import socketserver
-import sys
+import os
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 4178
+PORT = int(os.environ.get('PORT', 4178))
 
 
 class NoCacheHandler(http.server.SimpleHTTPRequestHandler):

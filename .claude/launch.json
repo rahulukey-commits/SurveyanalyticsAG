@@ -4,8 +4,9 @@
     {
       "name": "nps-analytics",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["server.py", "4178"],
-      "port": 4178
+      "runtimeArgs": ["server.py"],
+      "port": 0,
+      "autoPort": true
     }
   ]
 }

@@ -776,6 +776,59 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  // View router: 'nps' (10-tab NPS module) or 'survey' (Survey Analytics module).
+  // The sidebar swaps views; each view owns its own tab strip + content.
+  function showView(view) {
+    const bar = $('#tabs'); const root = $('#tab-content'); const bc = $('.breadcrumb');
+    bar.style.display = ''; bar.innerHTML = ''; root.innerHTML = ''; closeMenus();
+    if (view === 'survey') {
+      // Survey Analytics opens as a FULL-PAGE overlay (matches the live app's
+      // t-overlay: position:fixed, covers topbar + sidebar, scrolls internally).
+      openSurveyOverlay();
+      return;
+    }
+    // default = NPS view
+    bc.innerHTML = `<a href="#">Home</a><span class="sep">›</span><a href="#">CX Management</a><span class="sep">›</span><a href="#">NPS Feedback</a><span class="sep">›</span><span class="current">Multi-Tier Pilot latest <span class="chev">▾</span></span>`;
+    document.querySelectorAll('.subnav .sub').forEach(s => s.classList.remove('active'));
+    const npsItem = [...document.querySelectorAll('.subnav .sub')].find(s => s.textContent.trim() === 'NPS/Feedback');
+    if (npsItem) npsItem.classList.add('active');
+    buildTabs();
+    current = -1; selectTab(0);
+  }
+  // Full-page Survey Analytics overlay (replicates the live t-overlay behaviour)
+  let surveyOverlay = null;
+  function openSurveyOverlay() {
+    if (surveyOverlay) return;
+    closeMenus();
+    surveyOverlay = el('<div class="sa-fullpage" role="dialog" aria-modal="true" aria-label="Survey Analytics"></div>');
+    const inner = el('<div class="sa-fullpage-inner"></div>');
+    surveyOverlay.appendChild(inner);
+    document.body.appendChild(surveyOverlay);
+    document.body.classList.add('sa-noscroll');
+    if (window.SurveyAnalyticsModule) SurveyAnalyticsModule.render(inner);
+    else inner.appendChild(emptyState('Survey Analytics module not loaded.'));
+    // ← back button (rendered by the module) and Esc both close it
+    const back = inner.querySelector('.sa-back');
+    if (back) back.addEventListener('click', closeSurveyOverlay);
+    document.addEventListener('keydown', surveyEsc);
+    requestAnimationFrame(() => Charts.resizeAll());
+  }
+  function surveyEsc(e) { if (e.key === 'Escape') closeSurveyOverlay(); }
+  function closeSurveyOverlay() {
+    if (!surveyOverlay) return;
+    surveyOverlay.remove(); surveyOverlay = null;
+    document.body.classList.remove('sa-noscroll');
+    document.removeEventListener('keydown', surveyEsc);
+    // restore sidebar selection to the underlying NPS view
+    document.querySelectorAll('.subnav .sub').forEach(s => s.classList.remove('active'));
+    const npsItem = [...document.querySelectorAll('.subnav .sub')].find(s => s.textContent.trim() === 'NPS/Feedback');
+    if (npsItem) npsItem.classList.add('active');
+    requestAnimationFrame(() => Charts.resizeAll());
+  }
+
+  window.NpsUI.showView = showView;
+  window.NpsUI.closeSurveyOverlay = closeSurveyOverlay;
+
   window.addEventListener('resize', () => Charts.resizeAll());
   document.addEventListener('DOMContentLoaded', () => {
     buildTabs();
@@ -784,5 +837,21 @@
       const s = g.nextElementSibling;
       if (s && s.classList.contains('subnav')) { g.classList.toggle('open'); s.style.display = g.classList.contains('open') ? '' : 'none'; }
     }));
+    // Sidebar routing — Survey Analytics + NPS/Feedback (extendable)
+    document.querySelectorAll('.subnav .sub').forEach(s => s.addEventListener('click', () => {
+      if (s.dataset.route === 'survey-analytics') {
+        document.querySelectorAll('.subnav .sub').forEach(x => x.classList.remove('active'));
+        s.classList.add('active');
+        openSurveyOverlay();
+      } else if (s.textContent.trim() === 'NPS/Feedback') { closeSurveyOverlay(); showView('nps'); }
+    }));
+    // Breadcrumb "Analytics" click expands the group + closes NPS group focus
+    document.addEventListener('click', e => {
+      const t = e.target.closest && e.target.closest('[data-nav="analytics"]');
+      if (!t) return; e.preventDefault();
+      const grp = document.querySelector('[data-group="analytics"]');
+      const sub = document.querySelector('[data-subnav="analytics"]');
+      grp && grp.classList.add('open'); if (sub) sub.style.display = '';
+    });
   });
 })();
