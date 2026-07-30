@@ -404,7 +404,8 @@
     },
 
     /* ---- Time Intelligence: NPS vs Volume (dual axis) ------------------- */
-    npsVolume: function (el, metrics) {
+    npsVolume: function (el, metrics, opts) {
+      opts = opts || {};
       const inst = make(el);
       const cats = metrics.map(m => m.name);
       inst.setOption({
@@ -417,10 +418,12 @@
           { type: 'value', name: 'NPS', min: -100, max: 100, axisLabel, splitLine: { show: false } }
         ],
         series: [
-          { name: 'Volume', type: 'bar', barMaxWidth: 38, itemStyle: { color: '#c7b8ec', borderRadius: [4, 4, 0, 0] }, data: metrics.map(m => m.volume) },
+          { name: 'Volume', type: 'bar', barMaxWidth: 38, cursor: opts.onClick ? 'pointer' : 'default',
+            data: metrics.map(m => ({ value: m.volume, itemStyle: { color: opts.selectedId && m.id !== opts.selectedId ? '#c7b8ec66' : '#c7b8ec', borderRadius: [4, 4, 0, 0] } })) },
           { name: 'NPS', type: 'line', yAxisIndex: 1, smooth: true, symbol: 'circle', symbolSize: 8, lineStyle: { width: 3, color: '#7C3AED' }, itemStyle: { color: '#7C3AED' }, data: metrics.map(m => m.lowSample ? null : m.nps) }
         ]
       });
+      if (opts.onClick) inst.on('click', p => { if (p.dataIndex != null) opts.onClick(metrics[p.dataIndex]); });
       return inst;
     },
 
@@ -492,13 +495,20 @@
       // axis adapts: 0..max when everything is positive, diverging when not
       const axisMax = isRating ? 5 : (maxV <= 100 ? 100 : Math.ceil(maxV));
       const axisMin = anyNeg ? -axisMax : 0;
+      // Left margin sizes to the longest label instead of a fixed 160px, so
+      // long names (e.g. full legal entity names) aren't clipped — capped so
+      // one very long outlier can't eat the whole chart; anything beyond the
+      // cap truncates with an ellipsis (full text still shows in the tooltip).
+      const maxLabelLen = cats.reduce((a, c) => Math.max(a, (c || '').length), 0);
+      const leftMargin = Math.max(90, Math.min(320, Math.round(maxLabelLen * 6.5) + 24));
       inst.setOption({
         tooltip: Object.assign({ trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: p => {
           const r = rows[p[0].dataIndex]; return `<b>${r.name}</b><br/>${opts.metricLabel || 'NPS'}: <b>${r.value}</b><br/>Responses: ${r.responses}`;
         } }, baseTooltip),
-        grid: { left: 160, right: 76, top: 12, bottom: 40 },
+        grid: { left: leftMargin, right: 76, top: 12, bottom: 40 },
         xAxis: { type: 'value', min: axisMin, max: axisMax, axisLine: { lineStyle: { color: C.line } }, splitLine, axisLabel: Object.assign({}, axisLabel, { formatter: v => Math.abs(v) }) },
-        yAxis: { type: 'category', data: cats, inverse: true, axisLine: { show: false }, axisTick: { show: false }, axisLabel: Object.assign({}, axisLabel, { color: C.ink, fontWeight: 600, fontSize: 13 }) },
+        yAxis: { type: 'category', data: cats, inverse: true, axisLine: { show: false }, axisTick: { show: false },
+          axisLabel: Object.assign({}, axisLabel, { color: C.ink, fontWeight: 600, fontSize: 13, width: leftMargin - 16, overflow: 'truncate' }) },
         series: [{ type: 'bar', barMaxWidth: 22,
           data: rows.map(r => {
             const base = (opts.colorFor || (v => v >= 70 ? '#22c55e' : v >= 50 ? '#2563eb' : v >= 30 ? '#60a5fa' : v >= 0 ? '#f59e0b' : '#ef4444'))(r.value);

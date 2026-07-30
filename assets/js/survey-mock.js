@@ -429,13 +429,20 @@
     COUNTRY_HOURDAY[country] = m;
   });
 
+  // Brand scope's entity is an array (one or more brand names) — multi-select.
   function tiMatrixFor(scope, entity) {
-    if (scope === 'Brand' && entity && BRAND_HOURDAY[entity]) return BRAND_HOURDAY[entity];
+    if (scope === 'Brand' && entity && entity.length) {
+      if (entity.length === 1) return BRAND_HOURDAY[entity[0]] || tiZeroMatrix();
+      const m = [];
+      for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiSum(entity.map(b => BRAND_HOURDAY[b][day][h])); }
+      return m;
+    }
     if (scope === 'Country' && entity && COUNTRY_HOURDAY[entity]) return COUNTRY_HOURDAY[entity];
     const m = [];
     for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiSum(BUS.map(b => BRAND_HOURDAY[b.name][day][h])); }
     return m;
   }
+  function tiZeroMatrix() { const m = []; for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiEmpty(); } return m; }
   function tiHoursInSlot(slot) {
     const sh = parseInt(slot.start, 10), eh = parseInt(slot.end, 10), hrs = [];
     if (eh > sh) { for (let h = sh; h < eh; h++) hrs.push(h); }
@@ -456,10 +463,6 @@
         prevNps: Math.max(-100, Math.min(100, nps - prevDelta)), trend: prevDelta,
         detractorPct: total.n ? Math.round((total.d / total.n) * 100) : 0 };
     });
-  }
-  function tiHeatmap(slots, scope, entity, period) {
-    return tiSlotMetrics(slots, scope, entity, period).map(m => ({ id: m.id, name: m.name,
-      cells: m.perDay.map((agg, day) => ({ day: TI_DOW[day], nps: agg.n ? tiNps(agg) : null, n: agg.n, agg, lowSample: agg.n < TI_MIN_SAMPLE })) }));
   }
   function tiWeekendDays() { return tiGet(TI_KEYS.weekend, [5, 6]); }
   function tiWeekdayWeekend(slots, scope, entity, period) {
@@ -517,16 +520,26 @@
       const rows = COUNTRY_CONTRIB[entity].map(c => {
         const bm = tiApplyPeriod(tiRescale(tiSumBrandHours(c.brand, hours, dayIdx), c.shareFrac, c.npsDelta), period);
         return { name: c.brand, n: bm.n, nps: bm.n ? tiNps(bm) : 0, lowSample: bm.n < TI_MIN_SAMPLE, path: [c.brand, entity], leaf: false };
-      }).sort((a, b) => b.n - a.n);
+      }).sort((a, b) => b.nps - a.nps);
       return { level: 'Brand', label: 'Brand-wise breakdown', rows };
     }
-    const basePath = drillPath.length ? drillPath : (scope === 'Brand' && entity ? [entity] : []);
+    // Multiple brands selected: the root shows a brand-wise breakdown among
+    // just the selected brands (clicking one continues down its own
+    // Country -> State -> Zone -> Store hierarchy as usual).
+    if (!drillPath.length && scope === 'Brand' && entity && entity.length > 1) {
+      const rows = entity.map(brandName => {
+        const bm = tiNodeAgg(brandName, [], hours, dayIdx, period);
+        return { name: brandName, n: bm.n, nps: bm.n ? tiNps(bm) : 0, lowSample: bm.n < TI_MIN_SAMPLE, path: [brandName], leaf: false };
+      }).sort((a, b) => b.nps - a.nps);
+      return { level: 'Brand', label: 'Brand-wise breakdown', rows };
+    }
+    const basePath = drillPath.length ? drillPath : (scope === 'Brand' && entity && entity.length ? [entity[0]] : []);
     const depth = basePath.length;
     const rows = drilldown('NPS', basePath).map(row => {
       const bm = depth ? tiNodeAgg(basePath[0], basePath.slice(1).concat([row.name]), hours, dayIdx, period)
         : tiNodeAgg(row.name, [], hours, dayIdx, period);
       return { name: row.name, n: bm.n, nps: bm.n ? tiNps(bm) : 0, lowSample: bm.n < TI_MIN_SAMPLE, path: basePath.concat([row.name]), leaf: !canDrill(depth) };
-    }).sort((a, b) => b.n - a.n);
+    }).sort((a, b) => b.nps - a.nps);
     const level = TI_LEVEL_LABELS[depth] || 'Store';
     return { level, label: level + '-wise breakdown', rows };
   }
@@ -534,7 +547,10 @@
   // the un-drilled Overall root, since the slot's own total already covers it.
   function tiDrillNode(scope, entity, drillPath, hours, dayIdx, period) {
     if (drillPath.length) return tiNodeAgg(drillPath[0], drillPath.slice(1), hours, dayIdx, period);
-    if (scope === 'Brand' && entity) return tiNodeAgg(entity, [], hours, dayIdx, period);
+    if (scope === 'Brand' && entity && entity.length) {
+      if (entity.length === 1) return tiNodeAgg(entity[0], [], hours, dayIdx, period);
+      return tiApplyPeriod(tiSum(entity.map(b => tiSumBrandHours(b, hours, dayIdx))), period);
+    }
     if (scope === 'Country' && entity && COUNTRY_CONTRIB[entity]) {
       const parts = COUNTRY_CONTRIB[entity].map(c => tiRescale(tiSumBrandHours(c.brand, hours, dayIdx), c.shareFrac, c.npsDelta));
       return tiApplyPeriod(tiSum(parts), period);
@@ -579,12 +595,12 @@
     saveSlots: s => tiSet(TI_KEYS.slots, s),
     getWeekendDays: tiWeekendDays,
     saveWeekendDays: arr => tiSet(TI_KEYS.weekend, arr),
-    overview: tiOverview, slotMetrics: tiSlotMetrics, heatmap: tiHeatmap,
+    overview: tiOverview, slotMetrics: tiSlotMetrics,
     weekdayWeekend: tiWeekdayWeekend, drilldown: tiDrilldown, drillAt: tiDrillAt,
     periodRange: tiPeriodRange, formatRange: tiFormatRange, daysBetween: tiDaysBetween, fmtISO: tiFmtISO, today: TI_TODAY,
     aggregateAll: function (slots, scope, entity, period) {
       if (!slots || !slots.length) return { empty: true };
-      return { overview: tiOverview(slots, scope, entity, period), heatmap: tiHeatmap(slots, scope, entity, period) };
+      return { overview: tiOverview(slots, scope, entity, period) };
     }
   };
 

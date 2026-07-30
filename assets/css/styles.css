@@ -402,6 +402,12 @@ body.sa-noscroll { overflow: hidden; }
 .sa-table th.sa-sortable { cursor: pointer; user-select: none; }
 .sa-table th.sa-sortable:hover { color: #7C3AED; }
 
+/* ---- Time Intelligence: NPS-by-slot drilldown breadcrumb --------------- */
+.sa-dl-crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; }
+.sa-dl-chip { font-size: 12px; font-weight: 600; color: var(--ink-2); background: var(--hover); border-radius: 20px; padding: 4px 12px; white-space: nowrap; }
+.sa-dl-chip-active { background: #F4EFFE; color: #7C3AED; }
+.sa-dl-chip-sep { color: var(--ink-3); font-size: 11px; }
+
 .sa-ti-insights { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 900px) { .sa-ti-insights { grid-template-columns: 1fr; } }
 .sa-ti-ins { display: flex; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; }

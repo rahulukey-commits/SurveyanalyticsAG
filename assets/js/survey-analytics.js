@@ -461,23 +461,61 @@
       const vs = { slotView: 'table', wwView: 'table', sortKey: 'nps', sortDir: -1 };
       const npsCol = v => v >= 50 ? '#22c55e' : v >= 1 ? '#f59e0b' : '#ef4444';
       const arrow = t => t > 1 ? `<span style="color:#22c55e">+${t}% ↗</span>` : t < -1 ? `<span style="color:#ef4444">${t}% ↘</span>` : `<span class="muted">0%</span>`;
+      // Inline drill state for "NPS by Time Slot" — a selected slot expands a
+      // stack of levels below the table (Brand -> Country -> State -> Zone ->
+      // Store), the same interaction as Progressive Drilldown, instead of a
+      // side drawer. Reset whenever the top filters change scope/entity/period,
+      // since a stale drillPath can be structurally invalid under a new scope.
+      let selectedSlotId = null;
+      let drillPath = [];
+      function resetDrill() { selectedSlotId = null; drillPath = []; }
 
       // Scope + Entity filter: Overall | Brand | Country. Picking Brand/Country
       // reveals a second dropdown listing that dimension's options.
+      // Brand is multi-select: entity is an array; clicking an option in the
+      // dropdown toggles its membership (matches the existing brand-chip
+      // picker in Metrics Comparison). Country stays single-select.
+      function brandEntityLabel(sel) {
+        if (sel.length === API.brandNames.length) return 'All Brands';
+        if (sel.length === 1) return sel[0];
+        return sel.length + ' brands';
+      }
+      // Returns { row, chips } as two SEPARATE elements — row is a single-line
+      // control meant to sit inline with the other filters (never taller than
+      // them); chips is a full-width pill row meant to be placed below the
+      // whole filter bar, so selecting multiple brands never distorts the
+      // filter row's alignment.
       function scopeEntityControl(state, onChange) {
-        const wrap = el('<div style="display:flex;gap:8px;"></div>');
+        const row = el('<div style="display:flex;gap:8px;"></div>');
+        const chips = el('<div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;"></div>');
         function paint() {
-          wrap.innerHTML = '';
-          wrap.appendChild(U.selectEl(state.scope, ['Overall', 'Brand', 'Country'], state.scope, v => {
+          row.innerHTML = '';
+          row.appendChild(U.selectEl(state.scope, ['Overall', 'Brand', 'Country'], state.scope, v => {
             state.scope = v;
-            state.entity = v === 'Brand' ? API.brandNames[0] : v === 'Country' ? TI.countryList[0] : null;
+            state.entity = v === 'Brand' ? [API.brandNames[0]] : v === 'Country' ? TI.countryList[0] : null;
             paint(); onChange();
           }));
-          if (state.scope === 'Brand') wrap.appendChild(U.selectEl(state.entity, API.brandNames, state.entity, v => { state.entity = v; onChange(); }));
-          else if (state.scope === 'Country') wrap.appendChild(U.selectEl(state.entity, TI.countryList, state.entity, v => { state.entity = v; onChange(); }));
+          if (state.scope === 'Brand') {
+            row.appendChild(U.selectEl(brandEntityLabel(state.entity), API.brandNames, state.entity[0], v => {
+              const i = state.entity.indexOf(v);
+              if (i >= 0) { if (state.entity.length > 1) state.entity.splice(i, 1); }
+              else state.entity.push(v);
+              paint(); onChange();
+            }));
+          } else if (state.scope === 'Country') {
+            row.appendChild(U.selectEl(state.entity, TI.countryList, state.entity, v => { state.entity = v; onChange(); }));
+          }
+          chips.innerHTML = '';
+          if (state.scope === 'Brand' && state.entity.length > 1) {
+            state.entity.forEach(b => {
+              const chip = el(`<span class="sa-lowpill" style="display:inline-flex;align-items:center;gap:5px;">${b}<span style="cursor:pointer;font-weight:700;" title="Remove">✕</span></span>`);
+              chip.lastElementChild.addEventListener('click', () => { state.entity = state.entity.filter(x => x !== b); paint(); onChange(); });
+              chips.appendChild(chip);
+            });
+          }
         }
         paint();
-        return wrap;
+        return { row, chips };
       }
       // "Custom" is encoded as 'Custom:<days>' so every TI.* call that takes a
       // single period string keeps working unchanged.
@@ -508,18 +546,18 @@
         return wrap;
       }
 
-      // ---- header: title + ⚙ Slots -----------------------------------------
+      // ---- header: title + ⚙ Slots + filters, all in one row --------------
       const hdr = el('<section class="sa-card sa-ti-hdr"></section>');
-      const hrow = el(`<div class="card-head" style="margin-bottom:0"><div class="sa-h4" style="margin:0">⏰ Time-Based Analysis</div><div class="right"></div></div>`);
       const gearBtn = el(`<button class="sa-tool sa-gear-btn" title="Configure time slots">⚙ Slots <span class="muted">(${slots.length})</span></button>`);
       gearBtn.addEventListener('click', openSlotModal);
-      $('.right', hrow).appendChild(gearBtn);
-      hdr.appendChild(hrow);
-      const mainFilters = el('<div class="sa-filters"></div>');
+      const mainFilters = el(`<div class="sa-filters" style="margin-top:0"><div class="sa-h4" style="margin:0;white-space:nowrap">⏰ Time-Based Analysis</div></div>`);
       mainFilters.appendChild(el('<span style="flex:1"></span>'));
-      mainFilters.appendChild(periodRangeControl(mainF, () => debounceMain()));
-      mainFilters.appendChild(scopeEntityControl(mainF, () => debounceMain()));
+      mainFilters.appendChild(gearBtn);
+      mainFilters.appendChild(periodRangeControl(mainF, () => { resetDrill(); debounceMain(); }));
+      const mainScopeEntity = scopeEntityControl(mainF, () => { resetDrill(); debounceMain(); });
+      mainFilters.appendChild(mainScopeEntity.row);
       hdr.appendChild(mainFilters);
+      hdr.appendChild(mainScopeEntity.chips);
       host.appendChild(hdr);
 
       // ---- KPI strip -------------------------------------------------------
@@ -542,43 +580,43 @@
       slotCard.appendChild(slotBody);
       host.appendChild(slotCard);
 
-      // ---- Heatmap ---------------------------------------------------------
-      const hmCard = el('<section class="sa-card"></section>');
-      hmCard.appendChild(el('<div class="sa-h4">NPS Heatmap — Slots × Day of Week</div>'));
-      hmCard.appendChild(el(`<div class="muted sa-sub" style="margin-bottom:10px">Each cell is one time slot on one day of the week. Cells below the 30-response threshold show “–”.</div>`));
-      const hmBody = el('<div></div>');
-      hmCard.appendChild(hmBody);
-      host.appendChild(hmCard);
+      // Drilldown renders in its OWN card, separate from the slot table above
+      // — hidden entirely until a slot is selected, so no empty box lingers.
+      const drillCard = el('<section class="sa-card"></section>');
+      drillCard.style.display = 'none';
+      const levelsContainer = el('<div></div>');
+      drillCard.appendChild(levelsContainer);
+      host.appendChild(drillCard);
 
-      // ---- Weekday vs Weekend (own filter + ⚙) -----------------------------
+      // ---- Weekday vs Weekend (own filter + ⚙, all in one row) ------------
       const wwCard = el('<section class="sa-card"></section>');
-      const wHead = el(`<div class="card-head" style="margin-bottom:6px"><div class="sa-h4" style="margin:0">Weekday vs Weekend</div><div class="right"></div></div>`);
       const wTblT = el('<button class="sa-tool sa-tool-active" title="Table">☰</button>');
       const wChtT = el('<button class="sa-tool" title="Chart">▥</button>');
       wTblT.addEventListener('click', () => { vs.wwView = 'table'; wTblT.classList.add('sa-tool-active'); wChtT.classList.remove('sa-tool-active'); drawWW(); });
       wChtT.addEventListener('click', () => { vs.wwView = 'chart'; wChtT.classList.add('sa-tool-active'); wTblT.classList.remove('sa-tool-active'); drawWW(); });
       const wGear = el('<button class="sa-tool" title="Configure weekend days">⚙ Weekend days</button>');
       wGear.addEventListener('click', openWeekendModal);
-      $('.right', wHead).appendChild(wTblT); $('.right', wHead).appendChild(wChtT); $('.right', wHead).appendChild(wGear);
-      wwCard.appendChild(wHead);
-      wwCard.appendChild(el('<div class="muted sa-sub">Uses its own filters — independent of the section above.</div>'));
-      const wwFilters = el('<div class="sa-filters"></div>');
+      const wwFilters = el(`<div class="sa-filters" style="margin-top:0"><div class="sa-h4" style="margin:0;white-space:nowrap">Weekday vs Weekend</div></div>`);
       wwFilters.appendChild(el('<span style="flex:1"></span>'));
+      wwFilters.appendChild(wTblT); wwFilters.appendChild(wChtT); wwFilters.appendChild(wGear);
       wwFilters.appendChild(periodRangeControl(wwF, () => debounceWW()));
-      wwFilters.appendChild(scopeEntityControl(wwF, () => debounceWW()));
+      const wwScopeEntity = scopeEntityControl(wwF, () => debounceWW());
+      wwFilters.appendChild(wwScopeEntity.row);
       wwCard.appendChild(wwFilters);
+      wwCard.appendChild(wwScopeEntity.chips);
+      wwCard.appendChild(el('<div class="muted sa-sub" style="margin-bottom:10px">Uses its own filters — independent of the section above.</div>'));
       const wwBody = el('<div></div>');
       wwCard.appendChild(wwBody);
       host.appendChild(wwCard);
 
       // ---- render pipeline -------------------------------------------------
       let mt = null, wt = null;
-      function debounceMain() { clearTimeout(mt); slotBody.innerHTML = ''; slotBody.appendChild(skel(240)); hmBody.innerHTML = ''; hmBody.appendChild(skel(320)); mt = setTimeout(drawMain, 260); }
+      function debounceMain() { clearTimeout(mt); slotBody.innerHTML = ''; slotBody.appendChild(skel(240)); mt = setTimeout(drawMain, 260); }
       function debounceWW() { clearTimeout(wt); wwBody.innerHTML = ''; wwBody.appendChild(skel(200)); wt = setTimeout(drawWW, 260); }
       const skel = h => el(`<div class="sa-skel" style="height:${h}px"></div>`);
 
       function drawMain() {
-        if (!slots.length) { kpis.innerHTML = ''; slotBody.innerHTML = ''; slotBody.appendChild(noSlots()); hmBody.innerHTML = ''; hmBody.appendChild(noSlots()); return; }
+        if (!slots.length) { kpis.innerHTML = ''; slotBody.innerHTML = ''; slotBody.appendChild(noSlots()); return; }
         const d = TI.aggregateAll(slots, mainF.scope, mainF.entity, effectivePeriod(mainF));
         const ov = d.overview;
         kpis.innerHTML = '';
@@ -587,11 +625,6 @@
          ['Lowest Slot', ov.worst ? ov.worst.name : '—', '#ef4444', ov.worst ? 'NPS ' + ov.worst.nps : '']]
           .forEach(([l, v, c, sub]) => kpis.appendChild(el(`<div class="sa-ti-kpi"><div class="sa-ti-kpi-l">${l}</div><div class="sa-ti-kpi-v" ${c ? `style="color:${c}"` : ''}>${v}</div>${sub ? `<div class="muted sa-sub">${sub}</div>` : ''}</div>`)));
         drawSlots(ov.metrics);
-        // heatmap
-        hmBody.innerHTML = '';
-        const hb = el(`<div class="chart" style="height:${Math.max(280, d.heatmap.length * 54 + 90)}px"></div>`);
-        hmBody.appendChild(hb);
-        Charts.heatmap(hb, d.heatmap);
         requestAnimationFrame(() => Charts.resizeAll());
       }
 
@@ -601,7 +634,7 @@
         if (vs.slotView === 'chart') {
           const b = el('<div class="chart" style="height:360px"></div>');
           slotBody.appendChild(b);
-          Charts.npsVolume(b, metrics);
+          Charts.npsVolume(b, metrics, { selectedId: selectedSlotId, onClick: m => { selectedSlotId = selectedSlotId === m.id ? null : m.id; drillPath = []; drawSlots(metrics); } });
         } else {
           const rows = metrics.slice().sort((a, b) => (a[vs.sortKey] - b[vs.sortKey]) * vs.sortDir);
           const th = (k, l) => `<th class="ta-r sa-sortable" data-k="${k}">${l}${vs.sortKey === k ? (vs.sortDir < 0 ? ' ▾' : ' ▴') : ''}</th>`;
@@ -609,11 +642,13 @@
           const tb = $('tbody', t);
           rows.forEach(m => {
             const cell = m.lowSample ? '<span class="sa-lowpill">Low sample</span>' : `<span style="color:${npsCol(m.nps)};font-weight:600">${m.nps}</span>`;
-            const tr = el(`<tr class="sa-rowlink" tabindex="0"><td><b>${m.name}</b></td><td class="muted">${m.start}–${m.end}</td>
+            const isSel = selectedSlotId === m.id;
+            const tr = el(`<tr class="sa-rowlink" tabindex="0" ${isSel ? 'style="background:var(--hover)"' : ''}><td><b>${m.name}</b></td><td class="muted">${m.start}–${m.end}</td>
               <td class="ta-r">${cell}</td><td class="ta-r">${fmt(m.volume)}</td>
               <td class="ta-r">${m.lowSample ? '—' : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? '—' : m.detractorPct + '%'}</td></tr>`);
-            tr.addEventListener('click', () => openDrill(m.id));
-            tr.addEventListener('keydown', e => { if (e.key === 'Enter') openDrill(m.id); });
+            const toggle = () => { selectedSlotId = selectedSlotId === m.id ? null : m.id; drillPath = []; drawSlots(metrics); };
+            tr.addEventListener('click', toggle);
+            tr.addEventListener('keydown', e => { if (e.key === 'Enter') toggle(); });
             tb.appendChild(tr);
           });
           t.querySelectorAll('.sa-sortable').forEach(h => h.addEventListener('click', () => {
@@ -622,6 +657,7 @@
           }));
           slotBody.appendChild(t);
         }
+        renderDrillLevels();
         requestAnimationFrame(() => Charts.resizeAll());
       }
 
@@ -763,76 +799,77 @@
         return null;
       }
 
-      // ---- drill-down (sa-styled side panel) --------------------------------
-      // Full hierarchy: Brand -> Country -> State -> Zone -> Store, anchored
-      // to the slot(+day) that was clicked. drillPath grows as rows are
-      // clicked; a breadcrumb (built from the top Scope filter + drillPath)
-      // lets you jump back up without closing the drawer.
-      function openDrill(slotId, dayName) {
-        const dd = TI.drilldown(slots, mainF.scope, mainF.entity, effectivePeriod(mainF), slotId, dayName);
-        if (!dd) return;
-        let drillPath = [];
-        const ov = el('<div class="sa-overlay"></div>');
-        const p = el(`<div class="sa-drawer" role="dialog" aria-label="Drill-down"></div>`);
-        p.appendChild(el(`<div class="card-head"><div class="sa-h4" style="margin:0">${dd.scope}</div><div class="right"><button class="sa-tool sa-x" aria-label="Close">✕</button></div></div>`));
-        const crumb = el('<div class="sa-sub" style="margin-bottom:10px"></div>');
-        const body = el('<div></div>');
-        p.appendChild(crumb); p.appendChild(body);
-        document.body.appendChild(ov); document.body.appendChild(p);
-        const close = () => { ov.remove(); p.remove(); };
-        ov.addEventListener('click', close); $('.sa-x', p).addEventListener('click', close);
-
-        function crumbItems() {
-          const items = [];
-          if (mainF.scope === 'Country' && mainF.entity) {
-            items.push({ label: mainF.entity, path: [] });
-            if (drillPath.length >= 2) items.push({ label: drillPath[0], path: drillPath.slice(0, 2) });
-            for (let i = 2; i < drillPath.length; i++) items.push({ label: drillPath[i], path: drillPath.slice(0, i + 1) });
-          } else if (mainF.scope === 'Brand' && mainF.entity) {
-            items.push({ label: mainF.entity, path: [] });
-            for (let i = 1; i < drillPath.length; i++) items.push({ label: drillPath[i], path: drillPath.slice(0, i + 1) });
-          } else {
-            items.push({ label: 'All Brands', path: [] });
-            for (let i = 0; i < drillPath.length; i++) items.push({ label: drillPath[i], path: drillPath.slice(0, i + 1) });
-          }
+      // ---- inline drilldown (same interaction as Progressive Drilldown) -----
+      // Full hierarchy: Brand -> Country -> State -> Zone -> Store, anchored to
+      // whichever slot is selected. Each level renders as its own stacked
+      // block below the slot table (never a side drawer); clicking a row in
+      // level d truncates drillPath to d and appends the picked child, exactly
+      // like Progressive Drilldown's levelBlock loop.
+      function levelCrumb(dd, path) {
+        if (mainF.scope === 'Country' && mainF.entity) {
+          const items = [{ label: mainF.entity, path: [] }];
+          if (path.length >= 2) items.push({ label: path[0], path: path.slice(0, 2) });
+          for (let i = 2; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
           return items;
         }
-
-        function render() {
-          const items = crumbItems();
-          crumb.innerHTML = items.map((it, i) => i === items.length - 1
-            ? `<b>${it.label}</b>`
-            : `<a href="#" data-i="${i}" style="color:#2563eb;text-decoration:none">${it.label}</a> <span class="muted">›</span> `).join('');
-          crumb.querySelectorAll('a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); drillPath = items[+a.dataset.i].path.slice(); render(); }));
-
-          const at = drillPath.length ? TI.drillAt(mainF.scope, mainF.entity, drillPath, dd.hours, dd.dayIdx, effectivePeriod(mainF)) : { node: dd.node, children: dd.children };
-          body.innerHTML = '';
-          if (at.node.lowSample) {
-            body.appendChild(el(`<div class="empty"><div class="big">Low sample (${fmt(at.node.n)})</div><div>Below the ${TI.MIN_SAMPLE}-response threshold.</div></div>`));
-            return;
-          }
-          body.appendChild(el(`<div class="sa-ti-kpis" style="grid-template-columns:1fr 1fr">
-            <div class="sa-ti-kpi"><div class="sa-ti-kpi-l">NPS</div><div class="sa-ti-kpi-v" style="color:${npsCol(at.node.nps)}">${at.node.nps}</div></div>
-            <div class="sa-ti-kpi"><div class="sa-ti-kpi-l">Responses</div><div class="sa-ti-kpi-v">${fmt(at.node.n)}</div></div></div>`));
-          body.appendChild(el(`<div class="muted sa-sub" style="margin:10px 0">
-            <i class="sa-dot" style="background:#22c55e"></i> Promoters ${at.node.promoterPct}% (${at.node.promoter}) &nbsp;
-            <i class="sa-dot" style="background:#f59e0b"></i> Passives ${at.node.passivePct}% (${at.node.passive}) &nbsp;
-            <i class="sa-dot" style="background:#ef4444"></i> Detractors ${at.node.detractorPct}% (${at.node.detractor})</div>`));
-          body.appendChild(el(`<div class="sa-h4" style="margin-top:14px">${at.children.label}</div>`));
-          const table = el(`<table class="table sa-table"><thead><tr><th>${at.children.level}</th><th class="ta-r">Responses</th><th class="ta-r">NPS</th><th></th></tr></thead><tbody></tbody></table>`);
-          const tb = $('tbody', table);
-          at.children.rows.forEach(r => {
-            const nCell = r.lowSample ? '<span class="sa-lowpill">Low</span>' : `<span style="color:${npsCol(r.nps)};font-weight:600">${r.nps}</span>`;
-            const tr = el(`<tr class="${r.leaf ? '' : 'sa-rowlink'}" ${r.leaf ? '' : 'tabindex="0"'}><td>${r.name}</td><td class="ta-r">${fmt(r.n)}</td><td class="ta-r">${nCell}</td><td class="ta-r muted">${r.leaf ? '' : '›'}</td></tr>`);
-            if (!r.leaf) {
-              tr.addEventListener('click', () => { drillPath = r.path.slice(); render(); });
-              tr.addEventListener('keydown', e => { if (e.key === 'Enter') { drillPath = r.path.slice(); render(); } });
-            }
-            tb.appendChild(tr);
-          });
-          body.appendChild(table);
+        if (mainF.scope === 'Brand' && mainF.entity && mainF.entity.length > 1) {
+          const items = [{ label: brandEntityLabel(mainF.entity), path: [] }];
+          for (let i = 0; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
+          return items;
         }
-        render();
+        if (mainF.scope === 'Brand' && mainF.entity) {
+          const items = [{ label: mainF.entity[0], path: [] }];
+          for (let i = 1; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
+          return items;
+        }
+        const items = [{ label: 'All Brands', path: [] }];
+        for (let i = 0; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
+        return items;
+      }
+      function drillLevelBlock(dd, path, depth) {
+        const at = depth === 0 ? { node: dd.node, children: dd.children }
+          : TI.drillAt(mainF.scope, mainF.entity, path, dd.hours, dd.dayIdx, effectivePeriod(mainF));
+        const wrap = el('<div class="sa-level"></div>');
+        const crumbItems = levelCrumb(dd, path).concat({ label: at.children.level, path: null });
+        const activeCount = path.length > 0 ? 2 : 1;
+        const crumb = el('<div class="sa-dl-crumb"></div>');
+        crumbItems.forEach((it, i) => {
+          if (i > 0) crumb.appendChild(el('<span class="sa-dl-chip-sep">›</span>'));
+          const chip = el(`<span class="sa-dl-chip${i >= crumbItems.length - activeCount ? ' sa-dl-chip-active' : ''}">${it.label}</span>`);
+          crumb.appendChild(chip);
+        });
+        wrap.appendChild(crumb);
+        if (at.node.lowSample) {
+          wrap.appendChild(el(`<div class="empty"><div class="big">Low sample (${fmt(at.node.n)})</div><div>Below the ${TI.MIN_SAMPLE}-response threshold.</div></div>`));
+          return wrap;
+        }
+        wrap.appendChild(bandLegend());
+        const barRows = at.children.rows.map(r => Object.assign({}, r, { value: r.nps, responses: r.n }));
+        const selectedHere = drillPath[depth] || null;
+        const canDrillHere = barRows.length && !barRows[0].leaf;
+        const box = el(`<div class="chart" style="height:${Math.max(160, barRows.length * 38 + 60)}px"></div>`);
+        wrap.appendChild(box);
+        Charts.divergingBars(box, barRows, {
+          colorFor: API.colorFor, metricLabel: 'NPS',
+          faded: selectedHere ? [selectedHere] : [],
+          onClick: canDrillHere ? r => {
+            const isCurrent = selectedHere && r.path[r.path.length - 1] === selectedHere;
+            drillPath = isCurrent ? drillPath.slice(0, depth) : r.path.slice();
+            renderDrillLevels();
+          } : undefined
+        });
+        requestAnimationFrame(() => Charts.resizeAll());
+        return wrap;
+      }
+      function renderDrillLevels() {
+        levelsContainer.innerHTML = '';
+        if (!selectedSlotId) { drillCard.style.display = 'none'; return; }
+        const dd = TI.drilldown(slots, mainF.scope, mainF.entity, effectivePeriod(mainF), selectedSlotId, null);
+        if (!dd) { drillCard.style.display = 'none'; return; }
+        drillCard.style.display = '';
+        for (let d = 0; d <= drillPath.length; d++) {
+          levelsContainer.appendChild(drillLevelBlock(dd, drillPath.slice(0, d), d));
+        }
       }
 
       drawMain(); drawWW();

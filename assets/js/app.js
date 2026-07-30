@@ -833,6 +833,16 @@
   document.addEventListener('DOMContentLoaded', () => {
     buildTabs();
     selectTab(0);
+    // Land on Survey Analytics by default — opens as the same full-page
+    // overlay a manual sidebar click would trigger, with its nav group
+    // expanded so the sidebar reflects where you actually are.
+    document.querySelectorAll('.subnav .sub').forEach(s => s.classList.remove('active'));
+    const surveyItem = [...document.querySelectorAll('.subnav .sub')].find(s => s.dataset.route === 'survey-analytics');
+    if (surveyItem) surveyItem.classList.add('active');
+    const analyticsGroup = document.querySelector('[data-group="analytics"]');
+    const analyticsSubnav = document.querySelector('[data-subnav="analytics"]');
+    if (analyticsGroup && analyticsSubnav) { analyticsGroup.classList.add('open'); analyticsSubnav.style.display = ''; }
+    openSurveyOverlay();
     document.querySelectorAll('.nav-item.group').forEach(g => g.addEventListener('click', () => {
       const s = g.nextElementSibling;
       if (s && s.classList.contains('subnav')) { g.classList.toggle('open'); s.style.display = g.classList.contains('open') ? '' : 'none'; }
