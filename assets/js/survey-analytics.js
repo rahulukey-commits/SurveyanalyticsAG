@@ -6,7 +6,7 @@
  * Progressive Drilldown  → NPS · CSAT · CES · RATING
  *      Aggregate gauge + Distribution of Responses
  *      Business Units: bar (Load More / Show All) ⇄ table (7 cols + pagination)
- *      click any row/bar → Country → State → Zone → Store (stacked levels)
+ *      click any row/bar → Country → Zone → State → City → Store (stacked levels)
  * AI Sentiment Analysis  → Executive Pulse (Score Trend · Sentiment
  *      Contribution · Top 5 Aspects) | Voice Of Customer (theme cloud + feed)
  * Area Of Improvements   → Things To Improve | Appreciation (stacked + total)
@@ -113,7 +113,7 @@
 
         // ---- Business Units + progressive drilldown levels
         const c2 = el('<section class="sa-card"></section>');
-        c2.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any brand to drill down to countries, states, zones and stores.</div>`));
+        c2.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any brand to drill down to countries, zones, states, cities and stores.</div>`));
         const levels = el('<div></div>');
         c2.appendChild(levels);
         holder.appendChild(c2);
@@ -325,7 +325,7 @@
         holder.appendChild(fr.bar);
         const d = API.improvements(state.improve);
         const c = el('<section class="sa-card"></section>');
-        c.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any brand to drill down to countries, states, zones and stores.</div>`));
+        c.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any brand to drill down to countries, zones, states, cities and stores.</div>`));
         c.appendChild(el(`<div><b>Business Units</b><div class="muted sa-sub">Total Surveys Generated: ${d.totalSurveys}&nbsp;&nbsp;Responses Received: ${d.responses}</div></div>`));
         c.appendChild(el(`<div class="sa-legend">${d.categories.map(([n, col]) => `<span class="sa-legend-item"><i class="sa-dot" style="background:${col}"></i>${n}</span>`).join('')}</div>`));
         const canvas = el('<div></div>');
@@ -462,8 +462,8 @@
       const npsCol = v => v >= 50 ? '#22c55e' : v >= 1 ? '#f59e0b' : '#ef4444';
       const arrow = t => t > 1 ? `<span style="color:#22c55e">+${t}% ↗</span>` : t < -1 ? `<span style="color:#ef4444">${t}% ↘</span>` : `<span class="muted">0%</span>`;
       // Inline drill state for "NPS by Time Slot" — a selected slot expands a
-      // stack of levels below the table (Brand -> Country -> State -> Zone ->
-      // Store), the same interaction as Progressive Drilldown, instead of a
+      // stack of levels below the table (Brand -> Country -> Zone -> State ->
+      // City -> Store), the same interaction as Progressive Drilldown, instead of a
       // side drawer. Reset whenever the top filters change scope/entity/period,
       // since a stale drillPath can be structurally invalid under a new scope.
       let selectedSlotId = null;
@@ -471,20 +471,25 @@
       function resetDrill() { selectedSlotId = null; drillPath = []; }
 
       // Scope + Entity filter: Overall | Brand | Country. Picking Brand/Country
-      // reveals a second dropdown listing that dimension's options.
-      // Brand is multi-select: entity is an array; clicking an option in the
-      // dropdown toggles its membership (matches the existing brand-chip
-      // picker in Metrics Comparison). Country stays single-select.
+      // reveals a second dropdown listing that dimension's options. Both
+      // Brand and Country are multi-select: entity is always an array;
+      // clicking an option in the dropdown toggles its membership (matches
+      // the existing brand-chip picker in Metrics Comparison).
       function brandEntityLabel(sel) {
         if (sel.length === API.brandNames.length) return 'All Brands';
         if (sel.length === 1) return sel[0];
         return sel.length + ' brands';
       }
+      function countryEntityLabel(sel) {
+        if (sel.length === TI.countryList.length) return 'All Countries';
+        if (sel.length === 1) return sel[0];
+        return sel.length + ' countries';
+      }
       // Returns { row, chips } as two SEPARATE elements — row is a single-line
       // control meant to sit inline with the other filters (never taller than
       // them); chips is a full-width pill row meant to be placed below the
-      // whole filter bar, so selecting multiple brands never distorts the
-      // filter row's alignment.
+      // whole filter bar, so selecting multiple brands/countries never
+      // distorts the filter row's alignment.
       function scopeEntityControl(state, onChange) {
         const row = el('<div style="display:flex;gap:8px;"></div>');
         const chips = el('<div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;"></div>');
@@ -492,7 +497,7 @@
           row.innerHTML = '';
           row.appendChild(U.selectEl(state.scope, ['Overall', 'Brand', 'Country'], state.scope, v => {
             state.scope = v;
-            state.entity = v === 'Brand' ? [API.brandNames[0]] : v === 'Country' ? TI.countryList[0] : null;
+            state.entity = v === 'Brand' ? [API.brandNames[0]] : v === 'Country' ? [TI.countryList[0]] : null;
             paint(); onChange();
           }));
           if (state.scope === 'Brand') {
@@ -503,13 +508,18 @@
               paint(); onChange();
             }));
           } else if (state.scope === 'Country') {
-            row.appendChild(U.selectEl(state.entity, TI.countryList, state.entity, v => { state.entity = v; onChange(); }));
+            row.appendChild(U.selectEl(countryEntityLabel(state.entity), TI.countryList, state.entity[0], v => {
+              const i = state.entity.indexOf(v);
+              if (i >= 0) { if (state.entity.length > 1) state.entity.splice(i, 1); }
+              else state.entity.push(v);
+              paint(); onChange();
+            }));
           }
           chips.innerHTML = '';
-          if (state.scope === 'Brand' && state.entity.length > 1) {
-            state.entity.forEach(b => {
-              const chip = el(`<span class="sa-lowpill" style="display:inline-flex;align-items:center;gap:5px;">${b}<span style="cursor:pointer;font-weight:700;" title="Remove">✕</span></span>`);
-              chip.lastElementChild.addEventListener('click', () => { state.entity = state.entity.filter(x => x !== b); paint(); onChange(); });
+          if ((state.scope === 'Brand' || state.scope === 'Country') && state.entity.length > 1) {
+            state.entity.forEach(x => {
+              const chip = el(`<span class="sa-lowpill" style="display:inline-flex;align-items:center;gap:5px;">${x}<span style="cursor:pointer;font-weight:700;" title="Remove">✕</span></span>`);
+              chip.lastElementChild.addEventListener('click', () => { state.entity = state.entity.filter(v => v !== x); paint(); onChange(); });
               chips.appendChild(chip);
             });
           }
@@ -575,7 +585,7 @@
       chtT.addEventListener('click', () => { vs.slotView = 'chart'; chtT.classList.add('sa-tool-active'); tblT.classList.remove('sa-tool-active'); drawSlots(); });
       $('.right', sHead).appendChild(tblT); $('.right', sHead).appendChild(chtT);
       slotCard.appendChild(sHead);
-      slotCard.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any time slot to drill down to brands, countries, states, zones and stores.</div>`));
+      slotCard.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any time slot to drill down to brands, countries, zones, states, cities and stores.</div>`));
       const slotBody = el('<div></div>');
       slotCard.appendChild(slotBody);
       host.appendChild(slotCard);
@@ -800,14 +810,27 @@
       }
 
       // ---- inline drilldown (same interaction as Progressive Drilldown) -----
-      // Full hierarchy: Brand -> Country -> State -> Zone -> Store, anchored to
+      // Full hierarchy: Brand -> Country -> Zone -> State -> City -> Store, anchored to
       // whichever slot is selected. Each level renders as its own stacked
       // block below the slot table (never a side drawer); clicking a row in
       // level d truncates drillPath to d and appends the picked child, exactly
       // like Progressive Drilldown's levelBlock loop.
       function levelCrumb(dd, path) {
+        if (mainF.scope === 'Country' && mainF.entity && mainF.entity.length > 1) {
+          // Multi-country: root is the mix; path[0] is a country until a brand
+          // is also picked, at which point path becomes [brand, country, ...]
+          // (matching the single-country shape below) for the rest of the walk.
+          const items = [{ label: countryEntityLabel(mainF.entity), path: [] }];
+          if (path.length === 1) { items.push({ label: path[0], path: path.slice(0, 1) }); return items; }
+          if (path.length >= 2) {
+            items.push({ label: path[1], path: path.slice(0, 2) });
+            items.push({ label: path[0], path: path.slice(0, 2) });
+            for (let i = 2; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
+          }
+          return items;
+        }
         if (mainF.scope === 'Country' && mainF.entity) {
-          const items = [{ label: mainF.entity, path: [] }];
+          const items = [{ label: mainF.entity[0], path: [] }];
           if (path.length >= 2) items.push({ label: path[0], path: path.slice(0, 2) });
           for (let i = 2; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
           return items;
