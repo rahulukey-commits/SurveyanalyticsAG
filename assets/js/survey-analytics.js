@@ -456,11 +456,16 @@
       const TI = API.TimeIntel;
       if (!TI) { host.appendChild(el('<section class="sa-card"><div class="empty"><div class="big">Time Intelligence engine not loaded.</div></div></section>')); return; }
       let slots = TI.getSlots();
-      const mainF = { scope: 'Overall', entity: null, period: 'This Month' };
-      const wwF = { scope: 'Overall', entity: null, period: 'This Month' };
+      // Default scope is Brand with every brand selected — mathematically the
+      // same aggregate the old "Overall" scope produced (tiMatrixFor sums the
+      // exact same brands either way), just expressed as "all brands picked"
+      // instead of a separate mode, so there's one fewer concept to explain.
+      const mainF = { scope: 'Brand', entity: API.brandNames.slice(), period: 'This Month' };
+      const wwF = { scope: 'Brand', entity: API.brandNames.slice(), period: 'This Month' };
       const vs = { slotView: 'table', wwView: 'table', sortKey: 'nps', sortDir: -1 };
       const npsCol = v => v >= 50 ? '#22c55e' : v >= 1 ? '#f59e0b' : '#ef4444';
       const arrow = t => t > 1 ? `<span style="color:#22c55e">+${t}% ↗</span>` : t < -1 ? `<span style="color:#ef4444">${t}% ↘</span>` : `<span class="muted">0%</span>`;
+      const fmtHour = h => String(h).padStart(2, '0') + ':00';
       // Inline drill state for "NPS by Time Slot" — a selected slot expands a
       // stack of levels below the table (Brand -> Country -> Zone -> State ->
       // City -> Store), the same interaction as Progressive Drilldown, instead of a
@@ -490,42 +495,65 @@
       // them); chips is a full-width pill row meant to be placed below the
       // whole filter bar, so selecting multiple brands/countries never
       // distorts the filter row's alignment.
-      function scopeEntityControl(state, onChange) {
-        const row = el('<div style="display:flex;gap:8px;"></div>');
-        const chips = el('<div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;"></div>');
-        function paint() {
-          row.innerHTML = '';
-          row.appendChild(U.selectEl(state.scope, ['Overall', 'Brand', 'Country'], state.scope, v => {
-            state.scope = v;
-            state.entity = v === 'Brand' ? [API.brandNames[0]] : v === 'Country' ? [TI.countryList[0]] : null;
-            paint(); onChange();
-          }));
-          if (state.scope === 'Brand') {
-            row.appendChild(U.selectEl(brandEntityLabel(state.entity), API.brandNames, state.entity[0], v => {
-              const i = state.entity.indexOf(v);
-              if (i >= 0) { if (state.entity.length > 1) state.entity.splice(i, 1); }
-              else state.entity.push(v);
-              paint(); onChange();
-            }));
-          } else if (state.scope === 'Country') {
-            row.appendChild(U.selectEl(countryEntityLabel(state.entity), TI.countryList, state.entity[0], v => {
-              const i = state.entity.indexOf(v);
-              if (i >= 0) { if (state.entity.length > 1) state.entity.splice(i, 1); }
-              else state.entity.push(v);
-              paint(); onChange();
-            }));
-          }
-          chips.innerHTML = '';
-          if ((state.scope === 'Brand' || state.scope === 'Country') && state.entity.length > 1) {
-            state.entity.forEach(x => {
-              const chip = el(`<span class="sa-lowpill" style="display:inline-flex;align-items:center;gap:5px;">${x}<span style="cursor:pointer;font-weight:700;" title="Remove">✕</span></span>`);
-              chip.lastElementChild.addEventListener('click', () => { state.entity = state.entity.filter(v => v !== x); paint(); onChange(); });
-              chips.appendChild(chip);
+      // Brand picker: button shows "All Brands" (or "N brands" / a single
+      // name) and opens a searchable checklist with a Select All/Deselect
+      // All toggle — replaces the old plain "Overall" mode entirely, since
+      // "every brand selected" already sums to the exact same numbers.
+      function brandMultiSelect(state, onChange) {
+        const btn = el('<div class="select" tabindex="0"></div>');
+        const paintBtn = () => { btn.textContent = brandEntityLabel(state.entity); };
+        paintBtn();
+        btn.addEventListener('click', e => {
+          e.stopPropagation();
+          U.closeMenus();
+          let q = '';
+          const menu = el('<div class="menu sa-brand-menu"></div>');
+          menu.addEventListener('click', e2 => e2.stopPropagation());
+          const searchRow = el('<div class="sa-brand-search"><input type="text" placeholder="Search Brands…"/><span class="sa-brand-search-ic">🔍</span></div>');
+          const bulkRow = el('<div></div>');
+          const listWrap = el('<div></div>');
+          menu.appendChild(searchRow); menu.appendChild(bulkRow); menu.appendChild(listWrap);
+          function paintMenu() {
+            const names = API.brandNames.filter(n => !q.trim() || n.toLowerCase().indexOf(q.trim().toLowerCase()) >= 0);
+            const allOn = names.length > 0 && names.every(n => state.entity.indexOf(n) >= 0);
+            bulkRow.innerHTML = '';
+            const bulkBtn = el(`<div class="mi"><b>${allOn ? 'Deselect All' : 'Select All'}</b></div>`);
+            bulkBtn.addEventListener('click', () => {
+              if (allOn) { state.entity = state.entity.filter(n => names.indexOf(n) < 0); if (!state.entity.length) state.entity = [names[0] || API.brandNames[0]]; }
+              else { const set = new Set(state.entity); names.forEach(n => set.add(n)); state.entity = Array.from(set); }
+              paintBtn(); paintMenu(); onChange();
+            });
+            bulkRow.appendChild(bulkBtn);
+            listWrap.innerHTML = '';
+            if (!names.length) { listWrap.appendChild(el('<div class="mi muted">No brands match.</div>')); }
+            names.forEach(n => {
+              const on = state.entity.indexOf(n) >= 0;
+              const item = el(`<div class="mi ${on ? 'checked' : ''}">${n}${on ? '<span class="ck">✓</span>' : ''}</div>`);
+              item.addEventListener('click', () => {
+                const i = state.entity.indexOf(n);
+                if (i >= 0) { if (state.entity.length > 1) state.entity.splice(i, 1); }
+                else state.entity.push(n);
+                paintBtn(); paintMenu(); onChange();
+              });
+              listWrap.appendChild(item);
             });
           }
-        }
-        paint();
-        return { row, chips };
+          $('input', searchRow).addEventListener('input', ev => { q = ev.target.value; paintMenu(); });
+          paintMenu();
+          document.body.appendChild(menu);
+          const r = btn.getBoundingClientRect();
+          const left = Math.min(r.left, window.innerWidth - 260);
+          menu.style.left = left + 'px'; menu.style.top = (r.bottom + 6) + 'px';
+          $('input', searchRow).focus();
+        });
+        return btn;
+      }
+      // No Scope selector, no Country option — just the one brand picker.
+      // state.scope stays fixed at 'Brand' (every TI.* function still keys
+      // off it); state.entity is always an array of brand names.
+      function scopeEntityControl(state, onChange) {
+        state.scope = 'Brand';
+        return { row: brandMultiSelect(state, onChange), chips: el('<div></div>') };
       }
       // "Custom" is encoded as 'Custom:<days>' so every TI.* call that takes a
       // single period string keeps working unchanged.
@@ -653,7 +681,7 @@
           rows.forEach(m => {
             const cell = m.lowSample ? '<span class="sa-lowpill">Low sample</span>' : `<span style="color:${npsCol(m.nps)};font-weight:600">${m.nps}</span>`;
             const isSel = selectedSlotId === m.id;
-            const tr = el(`<tr class="sa-rowlink" tabindex="0" ${isSel ? 'style="background:var(--hover)"' : ''}><td><b>${m.name}</b></td><td class="muted">${m.start}–${m.end}</td>
+            const tr = el(`<tr class="sa-rowlink" tabindex="0" ${isSel ? 'style="background:var(--hover)"' : ''}><td><b>${m.name}</b></td><td class="muted">${fmtHour(m.start)}–${fmtHour(m.end)}</td>
               <td class="ta-r">${cell}</td><td class="ta-r">${fmt(m.volume)}</td>
               <td class="ta-r">${m.lowSample ? '—' : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? '—' : m.detractorPct + '%'}</td></tr>`);
             const toggle = () => { selectedSlotId = selectedSlotId === m.id ? null : m.id; drillPath = []; drawSlots(metrics); };
@@ -699,7 +727,7 @@
             ['n', 'p', 'd'].forEach(k => { tot.wd[k] += r.wd[k]; tot.we[k] += r.we[k]; });
             const dl = (r.lowWeekday || r.lowWeekend) ? null : r.weekendNps - r.weekdayNps;
             const c = (nps, low) => low ? '<span class="sa-lowpill">Low</span>' : `<span style="color:${npsCol(nps)};font-weight:600">${nps}</span>`;
-            tb.appendChild(el(`<tr><td><b>${r.name}</b><div class="muted sa-sub">${r.start}–${r.end}</div></td>
+            tb.appendChild(el(`<tr><td><b>${r.name}</b><div class="muted sa-sub">${fmtHour(r.start)}–${fmtHour(r.end)}</div></td>
               <td class="ta-r">${c(r.weekdayNps, r.lowWeekday)}</td><td class="ta-r">${fmt(r.wd.n)}</td>
               <td class="ta-r">${c(r.weekendNps, r.lowWeekend)}</td><td class="ta-r">${fmt(r.we.n)}</td>
               <td class="ta-r">${dl === null ? '—' : `<b style="color:${dl >= 0 ? '#22c55e' : '#ef4444'}">${dl > 0 ? '+' : ''}${dl}</b>`}</td></tr>`));
@@ -733,28 +761,43 @@
         document.body.appendChild(ov); document.body.appendChild(m);
         return { m, close };
       }
+      // Whole-hour <select> (0-23) and market <select> ("All markets" + each
+      // TI.MARKETS entry) — shared by the add-row and every existing slot's
+      // edit row.
+      function hourOptions(sel) {
+        let html = '';
+        for (let h = 0; h < 24; h++) html += `<option value="${h}" ${+sel === h ? 'selected' : ''}>${fmtHour(h)}</option>`;
+        return html;
+      }
+      function marketOptions(sel) {
+        let html = `<option value="" ${!sel ? 'selected' : ''}>All markets</option>`;
+        TI.MARKETS.forEach(mk => { html += `<option value="${mk.key}" ${sel === mk.key ? 'selected' : ''}>${mk.label}</option>`; });
+        return html;
+      }
       function openSlotModal() {
-        const { m } = modal('⚙ Slot Configuration', 760);
-        m.appendChild(el('<div class="muted sa-sub" style="margin-bottom:12px">Define custom time slots (persisted). Editing re-maps all data and refreshes every view.</div>'));
+        const { m } = modal('⚙ Slot Configuration', 820);
+        m.appendChild(el('<div class="muted sa-sub" style="margin-bottom:12px">Define custom time slots (persisted). Editing re-maps all data and refreshes every view. Leave Market as "All markets" for a slot that applies to every brand (each still read in its own local time) — pick one market to restrict a slot to just that market\'s brands.</div>'));
         const tl = el('<div></div>'), list = el('<div class="sa-slotlist"></div>'), err = el('<div class="sa-err" style="display:none"></div>');
         m.appendChild(tl); m.appendChild(list); m.appendChild(err);
-        const add = el(`<div class="sa-addrow"><input class="sa-search" id="sn" placeholder="Slot name" style="min-width:150px"/>
-          <input class="sa-search" id="ss" type="time" value="08:00"/><span class="muted">to</span><input class="sa-search" id="se" type="time" value="12:00"/>
+        const add = el(`<div class="sa-addrow"><input class="sa-search" id="sn" placeholder="Slot name" style="min-width:130px"/>
+          <select class="sa-search" id="ss">${hourOptions(8)}</select><span class="muted">to</span><select class="sa-search" id="se">${hourOptions(12)}</select>
+          <select class="sa-search" id="smk">${marketOptions('')}</select>
           <button class="sa-outline" id="sa-add">Add slot</button></div>`);
         m.appendChild(add);
         function redraw() {
           tl.innerHTML = ''; tl.appendChild(timeline(slots));
           list.innerHTML = '';
           slots.forEach(s => {
-            const row = el(`<div class="sa-slotrow"><input class="sa-search f-n" value="${s.name}"/>
-              <input class="sa-search f-s" type="time" value="${s.start}"/><span class="muted">–</span><input class="sa-search f-e" type="time" value="${s.end}"/>
+            const row = el(`<div class="sa-slotrow"><input class="sa-search f-n" value="${s.name}" style="min-width:110px"/>
+              <select class="sa-search f-s">${hourOptions(s.start)}</select><span class="muted">–</span><select class="sa-search f-e">${hourOptions(s.end)}</select>
+              <select class="sa-search f-mk">${marketOptions(s.market || '')}</select>
               <span class="muted sa-dur"></span><span style="flex:1"></span>
               <button class="sa-linkbtn f-save">Save</button><button class="sa-linkbtn f-del" style="color:#ef4444">Delete</button>
               <div class="sa-err f-err" style="display:none;flex-basis:100%"></div></div>`);
             const upd = () => $('.sa-dur', row).textContent = dur($('.f-s', row).value, $('.f-e', row).value);
-            upd(); ['.f-s', '.f-e'].forEach(q => $(q, row).addEventListener('input', upd));
+            upd(); ['.f-s', '.f-e'].forEach(q => $(q, row).addEventListener('change', upd));
             $('.f-save', row).addEventListener('click', () => {
-              const nx = { id: s.id, name: $('.f-n', row).value.trim() || s.name, start: $('.f-s', row).value, end: $('.f-e', row).value };
+              const nx = { id: s.id, name: $('.f-n', row).value.trim() || s.name, start: +$('.f-s', row).value, end: +$('.f-e', row).value, market: $('.f-mk', row).value || null };
               const e2 = validate(slots.filter(x => x.id !== s.id), nx);
               if (e2) { $('.f-err', row).textContent = e2; $('.f-err', row).style.display = ''; return; }
               slots = slots.map(x => x.id === s.id ? nx : x); TI.saveSlots(slots); redraw(); refreshAll();
@@ -764,7 +807,7 @@
           });
         }
         $('#sa-add', add).addEventListener('click', () => {
-          const nx = { id: 's' + Date.now(), name: $('#sn', add).value.trim() || 'New slot', start: $('#ss', add).value, end: $('#se', add).value };
+          const nx = { id: 's' + Date.now(), name: $('#sn', add).value.trim() || 'New slot', start: +$('#ss', add).value, end: +$('#se', add).value, market: $('#smk', add).value || null };
           const e2 = validate(slots, nx);
           if (e2) { err.textContent = e2; err.style.display = ''; return; }
           err.style.display = 'none'; $('#sn', add).value = '';
@@ -792,20 +835,28 @@
       function timeline(sl) {
         const w = el('<div class="sa-timeline"></div>');
         const cols = ['#7C3AED', '#f59e0b', '#22c55e', '#06b6d4', '#a855f7', '#ef4444', '#5B21B6'];
-        sl.forEach((s, i) => cover(s).forEach(b => { const g = el('<div class="sa-tl-seg"></div>'); g.style.left = (b / 48 * 100) + '%'; g.style.width = (1 / 48 * 100) + '%'; g.style.background = cols[i % cols.length]; g.title = s.name; w.appendChild(g); }));
+        sl.forEach((s, i) => cover(s).forEach(h => { const g = el('<div class="sa-tl-seg"></div>'); g.style.left = (h / 24 * 100) + '%'; g.style.width = (1 / 24 * 100) + '%'; g.style.background = cols[i % cols.length]; g.title = s.name + (s.market ? ' — ' + s.market : ''); w.appendChild(g); }));
         [0, 6, 12, 18, 24].forEach(h => w.appendChild(el(`<div class="sa-tl-tick" style="left:${h / 24 * 100}%">${h}:00</div>`)));
         return w;
       }
-      const mins = t => { const [h, m2] = t.split(':').map(Number); return h * 60 + m2; };
-      function cover(s) { let a = Math.floor(mins(s.start) / 30), b = Math.floor(mins(s.end) / 30), o = []; if (b > a) { for (let i = a; i < b; i++) o.push(i); } else { for (let i = a; i < 48; i++) o.push(i); for (let i = 0; i < b; i++) o.push(i); } return o; }
-      function dur(a, b) { let d = mins(b) - mins(a); if (d <= 0) d += 1440; return Math.floor(d / 60) + 'h ' + (d % 60) + 'm'; }
+      // Slot boundaries are whole hours (0-23) — see TI_DEFAULT_SLOTS in
+      // survey-mock.js for why. `s.start`/`s.end` can legitimately be 0
+      // (midnight), so checks below use `== null` rather than a truthy test.
+      function cover(s) { const a = +s.start, b = +s.end, o = []; if (b > a) { for (let i = a; i < b; i++) o.push(i); } else { for (let i = a; i < 24; i++) o.push(i); for (let i = 0; i < b; i++) o.push(i); } return o; }
+      function dur(a, b) { let d = (+b) - (+a); if (d <= 0) d += 24; return d + 'h'; }
       function validate(others, s) {
-        if (!s.start || !s.end) return 'Start and end are required.';
-        let d = mins(s.end) - mins(s.start); if (d <= 0) d += 1440;
-        if (mins(s.start) === mins(s.end)) return 'End must differ from start.';
-        if (d < 30) return 'Slot must be at least 30 minutes.';
+        if (s.start == null || s.end == null || s.start === '' || s.end === '') return 'Start and end are required.';
+        if (+s.start === +s.end) return 'End must differ from start.';
         const mine = new Set(cover(s));
-        for (const o of others) if (cover(o).some(b => mine.has(b))) return `Overlaps with “${o.name}” (${o.start}–${o.end}).`;
+        // Two market-restricted slots for DIFFERENT markets never compete for
+        // the same brand's data, so they're allowed to share hours (e.g. an
+        // IST "Lunch" and a UK "Lunch" at the same wall-clock window). A slot
+        // with no market restriction applies to everyone, so it still
+        // conflicts with any market-specific slot at overlapping hours.
+        for (const o of others) {
+          const marketsCanClash = !s.market || !o.market || s.market === o.market;
+          if (marketsCanClash && cover(o).some(h => mine.has(h))) return `Overlaps with “${o.name}” (${fmtHour(o.start)}–${fmtHour(o.end)}).`;
+        }
         return null;
       }
 
@@ -816,11 +867,16 @@
       // level d truncates drillPath to d and appends the picked child, exactly
       // like Progressive Drilldown's levelBlock loop.
       function levelCrumb(dd, path) {
-        if (mainF.scope === 'Country' && mainF.entity && mainF.entity.length > 1) {
+        // Use the drill session's EFFECTIVE scope/entity, not the top-level
+        // filter directly — a market-restricted slot narrows to just that
+        // market's brands (see tiDrilldown), and the breadcrumb has to
+        // reflect that narrowing, not the unrestricted top-level selection.
+        const scope = dd.effScope, entity = dd.effEntity;
+        if (scope === 'Country' && entity && entity.length > 1) {
           // Multi-country: root is the mix; path[0] is a country until a brand
           // is also picked, at which point path becomes [brand, country, ...]
           // (matching the single-country shape below) for the rest of the walk.
-          const items = [{ label: countryEntityLabel(mainF.entity), path: [] }];
+          const items = [{ label: countryEntityLabel(entity), path: [] }];
           if (path.length === 1) { items.push({ label: path[0], path: path.slice(0, 1) }); return items; }
           if (path.length >= 2) {
             items.push({ label: path[1], path: path.slice(0, 2) });
@@ -829,19 +885,19 @@
           }
           return items;
         }
-        if (mainF.scope === 'Country' && mainF.entity) {
-          const items = [{ label: mainF.entity[0], path: [] }];
+        if (scope === 'Country' && entity) {
+          const items = [{ label: entity[0], path: [] }];
           if (path.length >= 2) items.push({ label: path[0], path: path.slice(0, 2) });
           for (let i = 2; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
           return items;
         }
-        if (mainF.scope === 'Brand' && mainF.entity && mainF.entity.length > 1) {
-          const items = [{ label: brandEntityLabel(mainF.entity), path: [] }];
+        if (scope === 'Brand' && entity && entity.length > 1) {
+          const items = [{ label: brandEntityLabel(entity), path: [] }];
           for (let i = 0; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
           return items;
         }
-        if (mainF.scope === 'Brand' && mainF.entity) {
-          const items = [{ label: mainF.entity[0], path: [] }];
+        if (scope === 'Brand' && entity) {
+          const items = [{ label: entity[0], path: [] }];
           for (let i = 1; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
           return items;
         }
@@ -851,7 +907,7 @@
       }
       function drillLevelBlock(dd, path, depth) {
         const at = depth === 0 ? { node: dd.node, children: dd.children }
-          : TI.drillAt(mainF.scope, mainF.entity, path, dd.hours, dd.dayIdx, effectivePeriod(mainF));
+          : TI.drillAt(dd.effScope, dd.effEntity, path, dd.hours, dd.dayIdx, effectivePeriod(mainF));
         const wrap = el('<div class="sa-level"></div>');
         const crumbItems = levelCrumb(dd, path).concat({ label: at.children.level, path: null });
         const activeCount = path.length > 0 ? 2 : 1;

@@ -15,48 +15,87 @@
   // hash() can be negative (32-bit signed) — use this for a safe non-negative modulo
   function hmod(s, n) { return ((hash(s) % n) + n) % n; }
 
-  // ---- Headline (matches the live default: NPS 63, 2.8M sent, 16.5K resp) --
+  // ---- Headline (matches the live default: NPS 63, 3.1M sent, 18.0K resp) --
+  // Totals bumped from the original 2.8M/16.5K to fold in Haldiram UK's
+  // volume, keeping "responses sum to the headline total" true for 6 brands.
   const HEADLINE = {
-    NPS:    { value: 63,  totalSurveys: '2.8M', responses: '16.5K', respN: 16500 },
-    CSAT:   { value: 78,  totalSurveys: '2.8M', responses: '16.5K', respN: 16500 },
-    CES:    { value: 71,  totalSurveys: '2.8M', responses: '16.5K', respN: 16500 },
-    RATING: { value: 4.3, totalSurveys: '2.8M', responses: '16.5K', respN: 16500 }
+    NPS:    { value: 63,  totalSurveys: '3.1M', responses: '18.0K', respN: 18000 },
+    CSAT:   { value: 78,  totalSurveys: '3.1M', responses: '18.0K', respN: 18000 },
+    CES:    { value: 71,  totalSurveys: '3.1M', responses: '18.0K', respN: 18000 },
+    RATING: { value: 4.3, totalSurveys: '3.1M', responses: '18.0K', respN: 18000 }
   };
   const DIST = {
-    NPS:  [{ key: 'Promoters',  range: '(9 to 10)', pct: 76, users: '12.5K', color: '#22c55e' },
-           { key: 'Passives',   range: '(7 to 8)',  pct: 11, users: '1.8K',  color: '#f59e0b' },
-           { key: 'Detractors', range: '(0 to 6)',  pct: 13, users: '2.2K',  color: '#ef4444' }],
-    CSAT: [{ key: 'Satisfied',    range: '(4 to 5)', pct: 78, users: '12.9K', color: '#22c55e' },
-           { key: 'Neutral',      range: '(3)',      pct: 12, users: '2.0K',  color: '#f59e0b' },
-           { key: 'Dissatisfied', range: '(1 to 2)', pct: 10, users: '1.6K',  color: '#ef4444' }],
-    CES:  [{ key: 'Effortless',  range: '(6 to 7)', pct: 71, users: '11.7K', color: '#22c55e' },
-           { key: 'Moderate',    range: '(4 to 5)', pct: 18, users: '3.0K',  color: '#f59e0b' },
-           { key: 'High Effort', range: '(1 to 3)', pct: 11, users: '1.8K',  color: '#ef4444' }],
-    RATING: [{ key: '5 ★', pct: 52, users: '8.6K', color: '#22c55e' },
-             { key: '4 ★', pct: 26, users: '4.3K', color: '#84cc16' },
-             { key: '3 ★', pct: 12, users: '2.0K', color: '#f59e0b' },
-             { key: '2 ★', pct: 6,  users: '1.0K', color: '#fb923c' },
-             { key: '1 ★', pct: 4,  users: '0.6K', color: '#ef4444' }]
+    NPS:  [{ key: 'Promoters',  range: '(9 to 10)', pct: 76, users: '13.7K', color: '#22c55e' },
+           { key: 'Passives',   range: '(7 to 8)',  pct: 11, users: '2.0K',  color: '#f59e0b' },
+           { key: 'Detractors', range: '(0 to 6)',  pct: 13, users: '2.3K',  color: '#ef4444' }],
+    CSAT: [{ key: 'Satisfied',    range: '(4 to 5)', pct: 78, users: '14.0K', color: '#22c55e' },
+           { key: 'Neutral',      range: '(3)',      pct: 12, users: '2.2K',  color: '#f59e0b' },
+           { key: 'Dissatisfied', range: '(1 to 2)', pct: 10, users: '1.8K',  color: '#ef4444' }],
+    CES:  [{ key: 'Effortless',  range: '(6 to 7)', pct: 71, users: '12.8K', color: '#22c55e' },
+           { key: 'Moderate',    range: '(4 to 5)', pct: 18, users: '3.2K',  color: '#f59e0b' },
+           { key: 'High Effort', range: '(1 to 3)', pct: 11, users: '2.0K',  color: '#ef4444' }],
+    RATING: [{ key: '5 ★', pct: 52, users: '9.4K', color: '#22c55e' },
+             { key: '4 ★', pct: 26, users: '4.7K', color: '#84cc16' },
+             { key: '3 ★', pct: 12, users: '2.2K', color: '#f59e0b' },
+             { key: '2 ★', pct: 6,  users: '1.1K', color: '#fb923c' },
+             { key: '1 ★', pct: 4,  users: '0.7K', color: '#ef4444' }]
   };
 
-  // ---- Business units: the 5 Haldiram legal entities (only) ----------------
+  // ---- Business units: the 6 Haldiram legal entities ------------------------
   const BU_NAMES = [
     'HALDIRAM MARKETING PVT. LTD. - HEFPL',
     'HALDIRAM MARKETING PVT. LTD.- HMCPL',
     'Haldiram Marketing Private Limited- HMPL',
     'Haldiram UAE',
-    'HALDIRAM MARKETING PVT. LTD. - HPPL'
+    'HALDIRAM MARKETING PVT. LTD. - HPPL',
+    'Haldiram UK'
   ];
-  // Explicit per-brand signature so the 5 rows span every score band (spread
+  // Explicit per-brand signature so the rows span every score band (spread
   // across Excellent/Good/Average/Poor) and responses sum to the headline
-  // total (16.5K), so the drilldown stays internally consistent.
+  // total (18.0K), so the drilldown stays internally consistent.
   const BU_SIGNATURE = {
     'HALDIRAM MARKETING PVT. LTD. - HEFPL':    { nps: 72, responses: 5300 },
     'HALDIRAM MARKETING PVT. LTD.- HMCPL':     { nps: 55, responses: 3100 },
     'Haldiram Marketing Private Limited- HMPL': { nps: 38, responses: 2600 },
     'Haldiram UAE':                             { nps: 68, responses: 4200 },
-    'HALDIRAM MARKETING PVT. LTD. - HPPL':     { nps: 5,  responses: 1300 }
+    'HALDIRAM MARKETING PVT. LTD. - HPPL':     { nps: 5,  responses: 1300 },
+    'Haldiram UK':                              { nps: 61, responses: 1500 }
   };
+  // ---- Per-brand local timezone ---------------------------------------------
+  // Every response is tied to an invoice timestamp stored in UTC; Time
+  // Intelligence's hour-of-day / day-of-week buckets ("Lunch", "Weekend", ...)
+  // are meaningless unless read in the RESPONDENT'S local time, not UTC or any
+  // one shared clock. India and the UAE run a single fixed offset year-round;
+  // the UK observes British Summer Time (BST, UTC+1) roughly late-March to
+  // late-October and GMT (UTC+0) the rest of the year, so its offset is
+  // computed from the date rather than hardcoded — see bstOffsetMinutes().
+  const BU_TIMEZONE = {
+    'HALDIRAM MARKETING PVT. LTD. - HEFPL':     { label: 'IST', offsetMinutes: 330 },
+    'HALDIRAM MARKETING PVT. LTD.- HMCPL':      { label: 'IST', offsetMinutes: 330 },
+    'Haldiram Marketing Private Limited- HMPL': { label: 'IST', offsetMinutes: 330 },
+    'HALDIRAM MARKETING PVT. LTD. - HPPL':      { label: 'IST', offsetMinutes: 330 },
+    'Haldiram UAE':                             { label: 'GST', offsetMinutes: 240 },
+    'Haldiram UK':                              { label: null, offsetMinutes: null } // resolved per-date, see below
+  };
+  // Last Sunday of a given (year, 0-based month), at 00:00 UTC.
+  function lastSundayOfMonth(year, monthIdx) {
+    const d = new Date(Date.UTC(year, monthIdx + 1, 0)); // last calendar day of the month
+    d.setUTCDate(d.getUTCDate() - d.getUTCDay()); // step back to that month's last Sunday
+    return d;
+  }
+  // British Summer Time runs from the last Sunday in March to the last Sunday
+  // in October (clocks go forward/back at 01:00 UTC); GMT otherwise.
+  function isBST(date) {
+    const y = date.getUTCFullYear();
+    return date >= lastSundayOfMonth(y, 2) && date < lastSundayOfMonth(y, 9);
+  }
+  function ukTimezone(date) { return isBST(date) ? { label: 'BST', offsetMinutes: 60 } : { label: 'GMT', offsetMinutes: 0 }; }
+  // Timezone for a brand as of `date` (defaults to TI_TODAY, defined below).
+  function brandTimezone(brandName, date) {
+    if (brandName === 'Haldiram UK') return ukTimezone(date || TI_TODAY);
+    return BU_TIMEZONE[brandName] || { label: 'IST', offsetMinutes: 330 };
+  }
+  function tzLabel(tz) { return `${tz.label} (UTC${tz.offsetMinutes >= 0 ? '+' : '-'}${Math.floor(Math.abs(tz.offsetMinutes) / 60)}${Math.abs(tz.offsetMinutes) % 60 ? ':' + (Math.abs(tz.offsetMinutes) % 60) : ''})`; }
 
   // Deterministic per-brand stats
   const BUS = BU_NAMES.map((name, i) => {
@@ -282,15 +321,38 @@
   // ==========================================================================
   const TI_DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const TI_MIN_SAMPLE = 30;
+  // Slot start/end are whole hours (0-23) — the underlying per-brand matrix
+  // (BRAND_HOURDAY) is itself indexed by whole hour, so minute-level slot
+  // boundaries were never actually honored; this makes the UI match reality.
+  // `market` is optional: null/unset means the slot applies to every brand
+  // (today's default, each still read in its own local time); set to one of
+  // TI_MARKETS' keys to restrict a slot to just that market's brands.
   const TI_DEFAULT_SLOTS = [
-    { id: 's1', name: 'Early Morning', start: '06:00', end: '09:00' },
-    { id: 's2', name: 'Late Morning',  start: '09:00', end: '12:00' },
-    { id: 's3', name: 'Lunch',         start: '12:00', end: '15:00' },
-    { id: 's4', name: 'Afternoon',     start: '15:00', end: '17:00' },
-    { id: 's5', name: 'Evening',       start: '17:00', end: '21:00' },
-    { id: 's6', name: 'Night',         start: '21:00', end: '06:00' }
+    { id: 's1', name: 'Early Morning', start: 6,  end: 9,  market: null },
+    { id: 's2', name: 'Late Morning',  start: 9,  end: 12, market: null },
+    { id: 's3', name: 'Lunch',         start: 12, end: 15, market: null },
+    { id: 's4', name: 'Afternoon',     start: 15, end: 17, market: null },
+    { id: 's5', name: 'Evening',       start: 17, end: 21, market: null },
+    { id: 's6', name: 'Night',         start: 21, end: 6,  market: null }
   ];
-  const TI_KEYS = { slots: 'sa_ti_slots_v1', weekend: 'sa_ti_weekend_v1' };
+  // Markets a slot can be restricted to — keyed the same way brandTimezone()
+  // labels fixed-offset brands ('IST'/'GST'); 'UK' covers Haldiram UK's
+  // date-dependent GMT/BST offset under one stable key.
+  const TI_MARKETS = [
+    { key: 'IST', short: 'IST', label: 'India (IST, UTC+5:30)' },
+    { key: 'GST', short: 'GST', label: 'UAE (GST, UTC+4:00)' },
+    { key: 'UK',  short: 'UK',  label: 'UK (GMT/BST)' }
+  ];
+  function marketKeyForBrand(brandName) {
+    if (brandName === 'Haldiram UK') return 'UK';
+    const tz = BU_TIMEZONE[brandName];
+    return tz ? tz.label : 'IST';
+  }
+  function marketLabel(key, short) {
+    const m = TI_MARKETS.find(x => x.key === key);
+    return m ? (short ? m.short : m.label) : key;
+  }
+  const TI_KEYS = { slots: 'sa_ti_slots_v2', weekend: 'sa_ti_weekend_v1' };
   function tiGet(key, fallback) { try { const v = localStorage.getItem(key); if (v) return JSON.parse(v); } catch (e) {} return fallback; }
   function tiSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} }
 
@@ -450,22 +512,64 @@
     return m;
   }
   function tiZeroMatrix() { const m = []; for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiEmpty(); } return m; }
+  // Which real brands make up the current scope/entity selection — used to
+  // tell whether the numbers on screen span more than one local timezone.
+  function tiBrandsInScope(scope, entity) {
+    if (scope === 'Brand' && entity && entity.length) return entity.slice();
+    if (scope === 'Country' && entity && entity.length) {
+      const set = new Set();
+      entity.forEach(c => (COUNTRY_CONTRIB[c] || []).forEach(x => set.add(x.brand)));
+      return Array.from(set);
+    }
+    return BU_NAMES.slice();
+  }
+  // Every hour/day bucket ("Lunch", "Weekend", ...) is read in each brand's
+  // OWN local time before being combined (see BU_TIMEZONE above) — this just
+  // reports which timezone(s) are in play so the UI can tell the user when
+  // "Lunch" or "Weekend" is blending more than one local clock.
+  function tiTimezoneInfo(scope, entity, date) {
+    const brands = tiBrandsInScope(scope, entity);
+    const zones = brands.map(b => brandTimezone(b, date));
+    const labels = Array.from(new Set(zones.map(tzLabel)));
+    return { brands, labels, mixed: labels.length > 1 };
+  }
+  // Which markets are actually present among the brands currently in scope —
+  // used to decide which market-restricted slots are even relevant to show.
+  function tiMarketsInScope(scope, entity) {
+    return new Set(tiBrandsInScope(scope, entity).map(marketKeyForBrand));
+  }
+  // A slot with no market restriction applies to everyone (today's default).
+  // A market-restricted slot only shows up when at least one brand currently
+  // in scope belongs to that market.
+  function tiVisibleSlots(slots, scope, entity) {
+    const markets = tiMarketsInScope(scope, entity);
+    return slots.filter(s => !s.market || markets.has(s.market));
+  }
   function tiHoursInSlot(slot) {
-    const sh = parseInt(slot.start, 10), eh = parseInt(slot.end, 10), hrs = [];
+    const sh = +slot.start, eh = +slot.end, hrs = [];
     if (eh > sh) { for (let h = sh; h < eh; h++) hrs.push(h); }
     else { for (let h = sh; h < 24; h++) hrs.push(h); for (let h = 0; h < eh; h++) hrs.push(h); }
     return hrs;
   }
 
   function tiSlotMetrics(slots, scope, entity, period) {
-    const m = tiMatrixFor(scope, entity);
-    return slots.map(slot => {
+    const scopeBrands = tiBrandsInScope(scope, entity);
+    const overallMatrix = tiMatrixFor(scope, entity);
+    const visible = tiVisibleSlots(slots, scope, entity);
+    return visible.map(slot => {
+      // A market-restricted slot only ever aggregates brands in that market
+      // (intersected with whatever's already in scope) — never the rest of
+      // scope's brands, regardless of what the top-level Scope/Entity says.
+      const m = slot.market
+        ? tiMatrixFor('Brand', scopeBrands.filter(b => marketKeyForBrand(b) === slot.market))
+        : overallMatrix;
       const hrs = tiHoursInSlot(slot);
       const perDay = TI_DOW.map((_, day) => tiApplyPeriod(tiSum(hrs.map(h => m[day][h])), period));
       const total = tiSum(perDay);
       const nps = tiNps(total);
       const prevDelta = Math.round(rng(hash((scope || '') + '|' + (entity || '') + '|' + (period || '') + '|' + slot.id + '|prev'))() * 16 - 8);
-      return { id: slot.id, name: slot.name, start: slot.start, end: slot.end, hours: hrs, perDay, total,
+      const name = slot.market ? `${slot.name} — ${marketLabel(slot.market, true)}` : slot.name;
+      return { id: slot.id, name, start: slot.start, end: slot.end, market: slot.market || null, hours: hrs, perDay, total,
         volume: total.n, nps, lowSample: total.n < TI_MIN_SAMPLE,
         prevNps: Math.max(-100, Math.min(100, nps - prevDelta)), trend: prevDelta,
         detractorPct: total.n ? Math.round((total.d / total.n) * 100) : 0 };
@@ -605,14 +709,19 @@
   function tiDrilldown(slots, scope, entity, period, slotId, dayName) {
     const m = tiSlotMetrics(slots, scope, entity, period).find(x => x.id === slotId);
     if (!m) return null;
+    // A market-restricted slot's own number already only reflects its
+    // market's brands (see tiSlotMetrics) — the drilldown underneath it must
+    // stay consistent with that, not fall back to the full top-level scope.
+    const effScope = m.market ? 'Brand' : scope;
+    const effEntity = m.market ? tiBrandsInScope(scope, entity).filter(b => marketKeyForBrand(b) === m.market) : entity;
     let agg = m.total, scopeLabel = m.name;
     const dayIdx = dayName ? TI_DOW.indexOf(dayName) : null;
     if (dayName) { agg = m.perDay[dayIdx]; scopeLabel = `${m.name} · ${dayName}`; }
-    const rootAgg = tiDrillNode(scope, entity, [], m.hours, dayIdx, period) || agg;
+    const rootAgg = tiDrillNode(effScope, effEntity, [], m.hours, dayIdx, period) || agg;
     return {
-      scope: scopeLabel, hours: m.hours, dayIdx,
+      scope: scopeLabel, hours: m.hours, dayIdx, effScope, effEntity,
       node: tiAggToStats(rootAgg),
-      children: tiDrillChildren(scope, entity, [], m.hours, dayIdx, period)
+      children: tiDrillChildren(effScope, effEntity, [], m.hours, dayIdx, period)
     };
   }
   // Called as the user clicks deeper into the hierarchy from the drawer.
@@ -626,14 +735,16 @@
 
   const TimeIntel = {
     MIN_SAMPLE: TI_MIN_SAMPLE, DOW: TI_DOW, DEFAULT_SLOTS: TI_DEFAULT_SLOTS, PERIODS: TI_PERIODS,
+    MARKETS: TI_MARKETS, marketKeyForBrand, marketLabel,
     countryList: COUNTRY_LIST.slice(),
     getSlots: () => tiGet(TI_KEYS.slots, TI_DEFAULT_SLOTS.slice()),
     saveSlots: s => tiSet(TI_KEYS.slots, s),
     getWeekendDays: tiWeekendDays,
     saveWeekendDays: arr => tiSet(TI_KEYS.weekend, arr),
-    overview: tiOverview, slotMetrics: tiSlotMetrics,
+    overview: tiOverview, slotMetrics: tiSlotMetrics, visibleSlots: tiVisibleSlots,
     weekdayWeekend: tiWeekdayWeekend, drilldown: tiDrilldown, drillAt: tiDrillAt,
     periodRange: tiPeriodRange, formatRange: tiFormatRange, daysBetween: tiDaysBetween, fmtISO: tiFmtISO, today: TI_TODAY,
+    timezoneInfo: tiTimezoneInfo,
     aggregateAll: function (slots, scope, entity, period) {
       if (!slots || !slots.length) return { empty: true };
       return { overview: tiOverview(slots, scope, entity, period) };
