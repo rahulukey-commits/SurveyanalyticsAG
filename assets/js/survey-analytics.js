@@ -466,14 +466,10 @@
       const npsCol = v => v >= 50 ? '#22c55e' : v >= 1 ? '#f59e0b' : '#ef4444';
       const arrow = t => t > 1 ? `<span style="color:#22c55e">+${t}% ↗</span>` : t < -1 ? `<span style="color:#ef4444">${t}% ↘</span>` : `<span class="muted">0%</span>`;
       const fmtHour = h => String(h).padStart(2, '0') + ':00';
-      // Inline drill state for "NPS by Time Slot" — a selected slot expands a
-      // stack of levels below the table (Brand -> Country -> Zone -> State ->
-      // City -> Store), the same interaction as Progressive Drilldown, instead of a
-      // side drawer. Reset whenever the top filters change scope/entity/period,
-      // since a stale drillPath can be structurally invalid under a new scope.
-      let selectedSlotId = null;
-      let drillPath = [];
-      function resetDrill() { selectedSlotId = null; drillPath = []; }
+      // Drill sections (NPS by Time Slot, NPS by Order Type) are each built
+      // by makeDrillSection() further below — same stacked-levels UI, same
+      // toggle-close behavior, parameterized by how to open/continue a
+      // session so the rendering code is written once and shared.
 
       // Scope + Entity filter: Overall | Brand | Country. Picking Brand/Country
       // reveals a second dropdown listing that dimension's options. Both
@@ -591,8 +587,8 @@
       const mainFilters = el(`<div class="sa-filters" style="margin-top:0"><div class="sa-h4" style="margin:0;white-space:nowrap">⏰ Time-Based Analysis</div></div>`);
       mainFilters.appendChild(el('<span style="flex:1"></span>'));
       mainFilters.appendChild(gearBtn);
-      mainFilters.appendChild(periodRangeControl(mainF, () => { resetDrill(); debounceMain(); }));
-      const mainScopeEntity = scopeEntityControl(mainF, () => { resetDrill(); debounceMain(); });
+      mainFilters.appendChild(periodRangeControl(mainF, () => { slotDrill.reset(); debounceMain(); }));
+      const mainScopeEntity = scopeEntityControl(mainF, () => { slotDrill.reset(); debounceMain(); });
       mainFilters.appendChild(mainScopeEntity.row);
       hdr.appendChild(mainFilters);
       hdr.appendChild(mainScopeEntity.chips);
@@ -625,6 +621,48 @@
       const levelsContainer = el('<div></div>');
       drillCard.appendChild(levelsContainer);
       host.appendChild(drillCard);
+      const slotDrill = makeDrillSection(levelsContainer, drillCard,
+        id => TI.drilldown(slots, mainF.scope, mainF.entity, effectivePeriod(mainF), id, null),
+        (dd, path) => TI.drillAt(dd.effScope, dd.effEntity, path, dd.hours, dd.dayIdx, effectivePeriod(mainF)));
+
+      // ---- NPS by Order Type (own independent filter, own drilldown) ------
+      // A standalone "Dimension" card, not a time cut — Dine-in vs Takeaway,
+      // fixed rows (no ⚙ config, since order type is a bill field, not
+      // something an admin defines). Sits right after NPS by Time Slot: both
+      // support the full drilldown, Weekday vs Weekend (no drilldown) closes
+      // the page out.
+      const otF = { entity: API.brandNames.slice(), period: 'This Month' };
+      const otVs = { view: 'table' };
+      const otCard = el('<section class="sa-card"></section>');
+      const otHead = el(`<div class="card-head" style="margin-bottom:8px"><div class="sa-h4" style="margin:0">NPS by Order Type</div><div class="right"></div></div>`);
+      const otTblT = el('<button class="sa-tool sa-tool-active" title="Table">☰</button>');
+      const otChtT = el('<button class="sa-tool" title="Chart">▥</button>');
+      otTblT.addEventListener('click', () => { otVs.view = 'table'; otTblT.classList.add('sa-tool-active'); otChtT.classList.remove('sa-tool-active'); drawOT(); });
+      otChtT.addEventListener('click', () => { otVs.view = 'chart'; otChtT.classList.add('sa-tool-active'); otTblT.classList.remove('sa-tool-active'); drawOT(); });
+      $('.right', otHead).appendChild(otTblT); $('.right', otHead).appendChild(otChtT);
+      otCard.appendChild(otHead);
+      const otFilters = el('<div class="sa-filters" style="margin-top:0"></div>');
+      otFilters.appendChild(el('<span style="flex:1"></span>'));
+      otFilters.appendChild(periodRangeControl(otF, () => { otDrill.reset(); debounceOT(); }));
+      const otScopeEntity = scopeEntityControl(otF, () => { otDrill.reset(); debounceOT(); });
+      otFilters.appendChild(otScopeEntity.row);
+      otCard.appendChild(otFilters);
+      otCard.appendChild(otScopeEntity.chips);
+      otCard.appendChild(el('<div class="muted sa-sub" style="margin-bottom:10px">Uses its own filters — independent of the section above.</div>'));
+      otCard.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on Dine-in or Takeaway to drill down to brands, countries, zones, states, cities and stores.</div>`));
+      const otBody = el('<div></div>');
+      otCard.appendChild(otBody);
+      host.appendChild(otCard);
+      const otDrillCard = el('<section class="sa-card"></section>');
+      otDrillCard.style.display = 'none';
+      const otLevelsContainer = el('<div></div>');
+      otDrillCard.appendChild(otLevelsContainer);
+      host.appendChild(otDrillCard);
+      const otDrill = makeDrillSection(otLevelsContainer, otDrillCard,
+        id => TI.orderTypeDrilldown(otF.entity, id, effectivePeriod(otF)),
+        // dd.scope is just the order type string itself here (tiOrderTypeDrilldown
+        // sets it to the metric's own name, with no "· Day" suffix like slots get).
+        (dd, path) => TI.orderTypeDrillAt(otF.entity, path, dd.scope, effectivePeriod(otF)));
 
       // ---- Weekday vs Weekend (own filter + ⚙, all in one row) ------------
       const wwCard = el('<section class="sa-card"></section>');
@@ -648,9 +686,10 @@
       host.appendChild(wwCard);
 
       // ---- render pipeline -------------------------------------------------
-      let mt = null, wt = null;
+      let mt = null, wt = null, ot = null;
       function debounceMain() { clearTimeout(mt); slotBody.innerHTML = ''; slotBody.appendChild(skel(240)); mt = setTimeout(drawMain, 260); }
       function debounceWW() { clearTimeout(wt); wwBody.innerHTML = ''; wwBody.appendChild(skel(200)); wt = setTimeout(drawWW, 260); }
+      function debounceOT() { clearTimeout(ot); otBody.innerHTML = ''; otBody.appendChild(skel(160)); ot = setTimeout(drawOT, 260); }
       const skel = h => el(`<div class="sa-skel" style="height:${h}px"></div>`);
 
       function drawMain() {
@@ -672,7 +711,8 @@
         if (vs.slotView === 'chart') {
           const b = el('<div class="chart" style="height:360px"></div>');
           slotBody.appendChild(b);
-          Charts.npsVolume(b, metrics, { selectedId: selectedSlotId, onClick: m => { selectedSlotId = selectedSlotId === m.id ? null : m.id; drillPath = []; drawSlots(metrics); } });
+          const sel = metrics.find(m => slotDrill.isSelected(m.id));
+          Charts.npsVolume(b, metrics, { selectedId: sel ? sel.id : null, onClick: m => { slotDrill.toggle(m.id); drawSlots(metrics); } });
         } else {
           const rows = metrics.slice().sort((a, b) => (a[vs.sortKey] - b[vs.sortKey]) * vs.sortDir);
           const th = (k, l) => `<th class="ta-r sa-sortable" data-k="${k}">${l}${vs.sortKey === k ? (vs.sortDir < 0 ? ' ▾' : ' ▴') : ''}</th>`;
@@ -680,11 +720,11 @@
           const tb = $('tbody', t);
           rows.forEach(m => {
             const cell = m.lowSample ? '<span class="sa-lowpill">Low sample</span>' : `<span style="color:${npsCol(m.nps)};font-weight:600">${m.nps}</span>`;
-            const isSel = selectedSlotId === m.id;
+            const isSel = slotDrill.isSelected(m.id);
             const tr = el(`<tr class="sa-rowlink" tabindex="0" ${isSel ? 'style="background:var(--hover)"' : ''}><td><b>${m.name}</b></td><td class="muted">${fmtHour(m.start)}–${fmtHour(m.end)}</td>
               <td class="ta-r">${cell}</td><td class="ta-r">${fmt(m.volume)}</td>
               <td class="ta-r">${m.lowSample ? '—' : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? '—' : m.detractorPct + '%'}</td></tr>`);
-            const toggle = () => { selectedSlotId = selectedSlotId === m.id ? null : m.id; drillPath = []; drawSlots(metrics); };
+            const toggle = () => { slotDrill.toggle(m.id); drawSlots(metrics); };
             tr.addEventListener('click', toggle);
             tr.addEventListener('keydown', e => { if (e.key === 'Enter') toggle(); });
             tb.appendChild(tr);
@@ -695,7 +735,35 @@
           }));
           slotBody.appendChild(t);
         }
-        renderDrillLevels();
+        slotDrill.render();
+        requestAnimationFrame(() => Charts.resizeAll());
+      }
+
+      function drawOT() {
+        const metrics = TI.orderTypeMetrics(otF.entity, effectivePeriod(otF));
+        otBody.innerHTML = '';
+        if (otVs.view === 'chart') {
+          const b = el('<div class="chart" style="height:280px"></div>');
+          otBody.appendChild(b);
+          const sel = metrics.find(m => otDrill.isSelected(m.id));
+          Charts.npsVolume(b, metrics, { selectedId: sel ? sel.id : null, onClick: m => { otDrill.toggle(m.id); drawOT(); } });
+        } else {
+          const t = el(`<table class="table sa-table"><thead><tr><th>Order Type</th><th class="ta-r">NPS</th><th class="ta-r">Responses</th><th class="ta-r">vs prev</th><th class="ta-r">Detractor %</th></tr></thead><tbody></tbody></table>`);
+          const tb = $('tbody', t);
+          metrics.forEach(m => {
+            const cell = m.lowSample ? '<span class="sa-lowpill">Low sample</span>' : `<span style="color:${npsCol(m.nps)};font-weight:600">${m.nps}</span>`;
+            const isSel = otDrill.isSelected(m.id);
+            const tr = el(`<tr class="sa-rowlink" tabindex="0" ${isSel ? 'style="background:var(--hover)"' : ''}><td><b>${m.name}</b></td>
+              <td class="ta-r">${cell}</td><td class="ta-r">${fmt(m.volume)}</td>
+              <td class="ta-r">${m.lowSample ? '—' : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? '—' : m.detractorPct + '%'}</td></tr>`);
+            const toggle = () => { otDrill.toggle(m.id); drawOT(); };
+            tr.addEventListener('click', toggle);
+            tr.addEventListener('keydown', e => { if (e.key === 'Enter') toggle(); });
+            tb.appendChild(tr);
+          });
+          otBody.appendChild(t);
+        }
+        otDrill.render();
         requestAnimationFrame(() => Charts.resizeAll());
       }
 
@@ -861,97 +929,109 @@
       }
 
       // ---- inline drilldown (same interaction as Progressive Drilldown) -----
-      // Full hierarchy: Brand -> Country -> Zone -> State -> City -> Store, anchored to
-      // whichever slot is selected. Each level renders as its own stacked
-      // block below the slot table (never a side drawer); clicking a row in
-      // level d truncates drillPath to d and appends the picked child, exactly
-      // like Progressive Drilldown's levelBlock loop.
-      function levelCrumb(dd, path) {
-        // Use the drill session's EFFECTIVE scope/entity, not the top-level
-        // filter directly — a market-restricted slot narrows to just that
-        // market's brands (see tiDrilldown), and the breadcrumb has to
-        // reflect that narrowing, not the unrestricted top-level selection.
-        const scope = dd.effScope, entity = dd.effEntity;
-        if (scope === 'Country' && entity && entity.length > 1) {
-          // Multi-country: root is the mix; path[0] is a country until a brand
-          // is also picked, at which point path becomes [brand, country, ...]
-          // (matching the single-country shape below) for the rest of the walk.
-          const items = [{ label: countryEntityLabel(entity), path: [] }];
-          if (path.length === 1) { items.push({ label: path[0], path: path.slice(0, 1) }); return items; }
-          if (path.length >= 2) {
-            items.push({ label: path[1], path: path.slice(0, 2) });
-            items.push({ label: path[0], path: path.slice(0, 2) });
-            for (let i = 2; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
+      // Full hierarchy: Brand -> Country -> Zone -> State -> City -> Store,
+      // anchored to whichever bucket (time slot, order type, ...) is
+      // selected. Each level renders as its own stacked block (never a side
+      // drawer); clicking a row in level d truncates the path to d and
+      // appends the picked child, like Progressive Drilldown's levelBlock
+      // loop. Generic over how a session opens/continues so every "pick a
+      // bucket, then drill Brand->Store underneath it" card — NPS by Time
+      // Slot today, NPS by Order Type, any future one — shares this exact
+      // rendering instead of re-implementing it.
+      //   openFn(id)        -> dd session shape, same as TI.drilldown/orderTypeDrilldown
+      //   continueFn(dd, path) -> {node, children}, same as TI.drillAt/orderTypeDrillAt
+      function makeDrillSection(container, cardEl, openFn, continueFn) {
+        let selectedId = null, drillPath = [];
+        function reset() { selectedId = null; drillPath = []; }
+        function isSelected(id) { return selectedId === id; }
+        function toggle(id) { selectedId = selectedId === id ? null : id; drillPath = []; render(); }
+        function levelCrumb(dd, path) {
+          // Use the drill session's EFFECTIVE scope/entity, not the top-level
+          // filter directly — a market-restricted slot narrows to just that
+          // market's brands (see tiDrilldown), and the breadcrumb has to
+          // reflect that narrowing, not the unrestricted top-level selection.
+          const scope = dd.effScope, entity = dd.effEntity;
+          if (scope === 'Country' && entity && entity.length > 1) {
+            // Multi-country: root is the mix; path[0] is a country until a brand
+            // is also picked, at which point path becomes [brand, country, ...]
+            // (matching the single-country shape below) for the rest of the walk.
+            const items = [{ label: countryEntityLabel(entity), path: [] }];
+            if (path.length === 1) { items.push({ label: path[0], path: path.slice(0, 1) }); return items; }
+            if (path.length >= 2) {
+              items.push({ label: path[1], path: path.slice(0, 2) });
+              items.push({ label: path[0], path: path.slice(0, 2) });
+              for (let i = 2; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
+            }
+            return items;
           }
-          return items;
-        }
-        if (scope === 'Country' && entity) {
-          const items = [{ label: entity[0], path: [] }];
-          if (path.length >= 2) items.push({ label: path[0], path: path.slice(0, 2) });
-          for (let i = 2; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
-          return items;
-        }
-        if (scope === 'Brand' && entity && entity.length > 1) {
-          const items = [{ label: brandEntityLabel(entity), path: [] }];
+          if (scope === 'Country' && entity) {
+            const items = [{ label: entity[0], path: [] }];
+            if (path.length >= 2) items.push({ label: path[0], path: path.slice(0, 2) });
+            for (let i = 2; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
+            return items;
+          }
+          if (scope === 'Brand' && entity && entity.length > 1) {
+            const items = [{ label: brandEntityLabel(entity), path: [] }];
+            for (let i = 0; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
+            return items;
+          }
+          if (scope === 'Brand' && entity) {
+            const items = [{ label: entity[0], path: [] }];
+            for (let i = 1; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
+            return items;
+          }
+          const items = [{ label: 'All Brands', path: [] }];
           for (let i = 0; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
           return items;
         }
-        if (scope === 'Brand' && entity) {
-          const items = [{ label: entity[0], path: [] }];
-          for (let i = 1; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
-          return items;
-        }
-        const items = [{ label: 'All Brands', path: [] }];
-        for (let i = 0; i < path.length; i++) items.push({ label: path[i], path: path.slice(0, i + 1) });
-        return items;
-      }
-      function drillLevelBlock(dd, path, depth) {
-        const at = depth === 0 ? { node: dd.node, children: dd.children }
-          : TI.drillAt(dd.effScope, dd.effEntity, path, dd.hours, dd.dayIdx, effectivePeriod(mainF));
-        const wrap = el('<div class="sa-level"></div>');
-        const crumbItems = levelCrumb(dd, path).concat({ label: at.children.level, path: null });
-        const activeCount = path.length > 0 ? 2 : 1;
-        const crumb = el('<div class="sa-dl-crumb"></div>');
-        crumbItems.forEach((it, i) => {
-          if (i > 0) crumb.appendChild(el('<span class="sa-dl-chip-sep">›</span>'));
-          const chip = el(`<span class="sa-dl-chip${i >= crumbItems.length - activeCount ? ' sa-dl-chip-active' : ''}">${it.label}</span>`);
-          crumb.appendChild(chip);
-        });
-        wrap.appendChild(crumb);
-        if (at.node.lowSample) {
-          wrap.appendChild(el(`<div class="empty"><div class="big">Low sample (${fmt(at.node.n)})</div><div>Below the ${TI.MIN_SAMPLE}-response threshold.</div></div>`));
+        function levelBlock(dd, path, depth) {
+          const at = depth === 0 ? { node: dd.node, children: dd.children } : continueFn(dd, path);
+          const wrap = el('<div class="sa-level"></div>');
+          const crumbItems = levelCrumb(dd, path).concat({ label: at.children.level, path: null });
+          const activeCount = path.length > 0 ? 2 : 1;
+          const crumb = el('<div class="sa-dl-crumb"></div>');
+          crumbItems.forEach((it, i) => {
+            if (i > 0) crumb.appendChild(el('<span class="sa-dl-chip-sep">›</span>'));
+            const chip = el(`<span class="sa-dl-chip${i >= crumbItems.length - activeCount ? ' sa-dl-chip-active' : ''}">${it.label}</span>`);
+            crumb.appendChild(chip);
+          });
+          wrap.appendChild(crumb);
+          if (at.node.lowSample) {
+            wrap.appendChild(el(`<div class="empty"><div class="big">Low sample (${fmt(at.node.n)})</div><div>Below the ${TI.MIN_SAMPLE}-response threshold.</div></div>`));
+            return wrap;
+          }
+          wrap.appendChild(bandLegend());
+          const barRows = at.children.rows.map(r => Object.assign({}, r, { value: r.nps, responses: r.n }));
+          const selectedHere = drillPath[depth] || null;
+          const canDrillHere = barRows.length && !barRows[0].leaf;
+          const box = el(`<div class="chart" style="height:${Math.max(160, barRows.length * 38 + 60)}px"></div>`);
+          wrap.appendChild(box);
+          Charts.divergingBars(box, barRows, {
+            colorFor: API.colorFor, metricLabel: 'NPS',
+            faded: selectedHere ? [selectedHere] : [],
+            onClick: canDrillHere ? r => {
+              const isCurrent = selectedHere && r.path[r.path.length - 1] === selectedHere;
+              drillPath = isCurrent ? drillPath.slice(0, depth) : r.path.slice();
+              render();
+            } : undefined
+          });
+          requestAnimationFrame(() => Charts.resizeAll());
           return wrap;
         }
-        wrap.appendChild(bandLegend());
-        const barRows = at.children.rows.map(r => Object.assign({}, r, { value: r.nps, responses: r.n }));
-        const selectedHere = drillPath[depth] || null;
-        const canDrillHere = barRows.length && !barRows[0].leaf;
-        const box = el(`<div class="chart" style="height:${Math.max(160, barRows.length * 38 + 60)}px"></div>`);
-        wrap.appendChild(box);
-        Charts.divergingBars(box, barRows, {
-          colorFor: API.colorFor, metricLabel: 'NPS',
-          faded: selectedHere ? [selectedHere] : [],
-          onClick: canDrillHere ? r => {
-            const isCurrent = selectedHere && r.path[r.path.length - 1] === selectedHere;
-            drillPath = isCurrent ? drillPath.slice(0, depth) : r.path.slice();
-            renderDrillLevels();
-          } : undefined
-        });
-        requestAnimationFrame(() => Charts.resizeAll());
-        return wrap;
-      }
-      function renderDrillLevels() {
-        levelsContainer.innerHTML = '';
-        if (!selectedSlotId) { drillCard.style.display = 'none'; return; }
-        const dd = TI.drilldown(slots, mainF.scope, mainF.entity, effectivePeriod(mainF), selectedSlotId, null);
-        if (!dd) { drillCard.style.display = 'none'; return; }
-        drillCard.style.display = '';
-        for (let d = 0; d <= drillPath.length; d++) {
-          levelsContainer.appendChild(drillLevelBlock(dd, drillPath.slice(0, d), d));
+        function render() {
+          container.innerHTML = '';
+          if (!selectedId) { cardEl.style.display = 'none'; return; }
+          const dd = openFn(selectedId);
+          if (!dd) { cardEl.style.display = 'none'; return; }
+          cardEl.style.display = '';
+          for (let d = 0; d <= drillPath.length; d++) {
+            container.appendChild(levelBlock(dd, drillPath.slice(0, d), d));
+          }
         }
+        return { toggle, reset, render, isSelected };
       }
 
-      drawMain(); drawWW();
+      drawMain(); drawWW(); drawOT();
     }
 
     paint();

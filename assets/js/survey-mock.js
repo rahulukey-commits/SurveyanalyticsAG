@@ -467,6 +467,75 @@
   const BRAND_HOURDAY = {};
   BUS.forEach(b => { BRAND_HOURDAY[b.name] = buildInvoiceMatrix(b); });
 
+  // Order type (from the bill's `orderType` field) — Dine-in vs Takeaway.
+  // Splits each hour×day cell of a brand's matrix into two sub-cells whose
+  // volumes sum back to the parent cell exactly, and whose own volume-
+  // weighted NPS lands on a brand-specific target such that combining both
+  // order types (weighted by their share) reconstructs the brand's real NPS.
+  const TI_ORDER_TYPES = ['Dine-in', 'Takeaway'];
+  function calibrateNpsSplit(volumeByCell, targetNps, rr) {
+    const npsRaw = []; let weightedSum = 0, totalN = 0;
+    for (let day = 0; day < 7; day++) {
+      npsRaw[day] = [];
+      for (let h = 0; h < 24; h++) {
+        const bias = Math.round(rr() * 8 - 4);
+        npsRaw[day][h] = bias;
+        weightedSum += bias * volumeByCell[day][h]; totalN += volumeByCell[day][h];
+      }
+    }
+    const meanBias = totalN ? weightedSum / totalN : 0;
+    const out = [];
+    for (let day = 0; day < 7; day++) {
+      out[day] = [];
+      for (let h = 0; h < 24; h++) {
+        const cellN = volumeByCell[day][h];
+        const nps = Math.max(-100, Math.min(100, Math.round(targetNps + npsRaw[day][h] - meanBias)));
+        const pr = Math.max(0.02, Math.min(0.98, (nps + 100) / 200));
+        const dr = Math.max(0, Math.min(1 - pr, pr - nps / 100));
+        const p = Math.round(cellN * pr), d = Math.round(cellN * dr), pa = Math.max(0, cellN - p - d);
+        out[day][h] = { n: cellN, p, pa, d };
+      }
+    }
+    return out;
+  }
+  function buildOrderTypeSplit(b, hourday) {
+    const rr = rng(hash(b.name + '|ordertype'));
+    const dineShareBase = 0.45 + (hmod(b.name, 40) / 100); // ~0.45-0.85, deterministic per brand
+    const otNpsDelta = Math.round(rr() * 14 - 7); // Dine-in vs Takeaway target NPS gap
+    const dineVol = [], takeVol = [];
+    let dineTotalN = 0, takeTotalN = 0;
+    for (let day = 0; day < 7; day++) {
+      dineVol[day] = []; takeVol[day] = [];
+      for (let h = 0; h < 24; h++) {
+        const cellN = hourday[day][h].n;
+        const isNight = h >= 22 || h < 5; // less dine-in traffic late at night
+        const dineShare = Math.max(0.1, Math.min(0.92, dineShareBase - (isNight ? 0.25 : 0)));
+        const dineN = Math.round(cellN * dineShare);
+        dineVol[day][h] = dineN; takeVol[day][h] = cellN - dineN;
+        dineTotalN += dineN; takeTotalN += (cellN - dineN);
+      }
+    }
+    const dineShareOverall = (dineTotalN + takeTotalN) ? dineTotalN / (dineTotalN + takeTotalN) : 0.5;
+    const dineTarget = b.nps + otNpsDelta * (1 - dineShareOverall);
+    const takeTarget = b.nps - otNpsDelta * dineShareOverall;
+    return { 'Dine-in': calibrateNpsSplit(dineVol, dineTarget, rr), 'Takeaway': calibrateNpsSplit(takeVol, takeTarget, rr) };
+  }
+  const BRAND_HOURDAY_OT = {};
+  BUS.forEach(b => { BRAND_HOURDAY_OT[b.name] = buildOrderTypeSplit(b, BRAND_HOURDAY[b.name]); });
+  // Resolves a brand's hour×day matrix, optionally restricted to one or more
+  // order types. No restriction (or all of them) is byte-identical to the
+  // brand's plain BRAND_HOURDAY matrix — existing callers that never pass
+  // orderTypes keep working exactly as before.
+  function brandMatrixFor(brandName, orderTypes) {
+    if (!orderTypes || !orderTypes.length || orderTypes.length >= TI_ORDER_TYPES.length) return BRAND_HOURDAY[brandName] || tiZeroMatrix();
+    const mats = orderTypes.map(ot => (BRAND_HOURDAY_OT[brandName] || {})[ot]).filter(Boolean);
+    if (!mats.length) return tiZeroMatrix();
+    if (mats.length === 1) return mats[0];
+    const m = [];
+    for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiSum(mats.map(mm => mm[day][h])); }
+    return m;
+  }
+
   // Country-level matrices — each brand's matrix is split across the
   // countries it operates in using the exact same share/NPS numbers the
   // Progressive Drilldown tab shows (via drilldown('NPS',[brand])), so this
@@ -494,11 +563,14 @@
   });
 
   // Both Brand and Country scope's entity are arrays — multi-select.
-  function tiMatrixFor(scope, entity) {
+  // orderTypes optionally restricts to one or more TI_ORDER_TYPES; omitted
+  // (or all of them) is unfiltered — byte-identical to before this existed.
+  function tiMatrixFor(scope, entity, orderTypes) {
     if (scope === 'Brand' && entity && entity.length) {
-      if (entity.length === 1) return BRAND_HOURDAY[entity[0]] || tiZeroMatrix();
+      if (entity.length === 1) return brandMatrixFor(entity[0], orderTypes);
+      const mats = entity.map(b => brandMatrixFor(b, orderTypes));
       const m = [];
-      for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiSum(entity.map(b => BRAND_HOURDAY[b][day][h])); }
+      for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiSum(mats.map(mm => mm[day][h])); }
       return m;
     }
     if (scope === 'Country' && entity && entity.length) {
@@ -507,8 +579,9 @@
       for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiSum(entity.map(c => (COUNTRY_HOURDAY[c] || tiZeroMatrix())[day][h])); }
       return m;
     }
+    const mats0 = BUS.map(b => brandMatrixFor(b.name, orderTypes));
     const m = [];
-    for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiSum(BUS.map(b => BRAND_HOURDAY[b.name][day][h])); }
+    for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiSum(mats0.map(mm => mm[day][h])); }
     return m;
   }
   function tiZeroMatrix() { const m = []; for (let day = 0; day < 7; day++) { m[day] = []; for (let h = 0; h < 24; h++) m[day][h] = tiEmpty(); } return m; }
@@ -552,16 +625,16 @@
     return hrs;
   }
 
-  function tiSlotMetrics(slots, scope, entity, period) {
+  function tiSlotMetrics(slots, scope, entity, period, orderTypes) {
     const scopeBrands = tiBrandsInScope(scope, entity);
-    const overallMatrix = tiMatrixFor(scope, entity);
+    const overallMatrix = tiMatrixFor(scope, entity, orderTypes);
     const visible = tiVisibleSlots(slots, scope, entity);
     return visible.map(slot => {
       // A market-restricted slot only ever aggregates brands in that market
       // (intersected with whatever's already in scope) — never the rest of
       // scope's brands, regardless of what the top-level Scope/Entity says.
       const m = slot.market
-        ? tiMatrixFor('Brand', scopeBrands.filter(b => marketKeyForBrand(b) === slot.market))
+        ? tiMatrixFor('Brand', scopeBrands.filter(b => marketKeyForBrand(b) === slot.market), orderTypes)
         : overallMatrix;
       const hrs = tiHoursInSlot(slot);
       const perDay = TI_DOW.map((_, day) => tiApplyPeriod(tiSum(hrs.map(h => m[day][h])), period));
@@ -576,9 +649,9 @@
     });
   }
   function tiWeekendDays() { return tiGet(TI_KEYS.weekend, [5, 6]); }
-  function tiWeekdayWeekend(slots, scope, entity, period) {
+  function tiWeekdayWeekend(slots, scope, entity, period, orderTypes) {
     const wk = tiWeekendDays();
-    const metrics = tiSlotMetrics(slots, scope, entity, period);
+    const metrics = tiSlotMetrics(slots, scope, entity, period, orderTypes);
     let weekday = tiEmpty(), weekend = tiEmpty();
     metrics.forEach(m => m.perDay.forEach((agg, day) => { if (wk.indexOf(day) >= 0) weekend = tiSum([weekend, agg]); else weekday = tiSum([weekday, agg]); }));
     const rr = rng(hash((scope || '') + '|' + (entity || '') + '|' + (period || '') + '|wwtrend'));
@@ -589,8 +662,8 @@
       delta: (weekday.n && weekend.n) ? (tiNps(weekend) - tiNps(weekday)) : 0, weekendDays: wk, trend: weeks
     };
   }
-  function tiOverview(slots, scope, entity, period) {
-    const metrics = tiSlotMetrics(slots, scope, entity, period);
+  function tiOverview(slots, scope, entity, period, orderTypes) {
+    const metrics = tiSlotMetrics(slots, scope, entity, period, orderTypes);
     const valid = metrics.filter(m => !m.lowSample);
     const total = tiSum(metrics.map(m => m.total));
     const best = valid.slice().sort((a, b) => b.nps - a.nps)[0] || null;
@@ -604,14 +677,15 @@
   // shown by the Progressive Drilldown tab via drilldown('NPS', path)), so
   // numbers stay consistent everywhere rather than inventing new data.
   const TI_LEVEL_LABELS = ['Brand', 'Country', 'Zone', 'State', 'City', 'Store'];
-  function tiSumBrandHours(brandName, hours, dayIdx) {
+  function tiSumBrandHours(brandName, hours, dayIdx, orderTypes) {
+    const mat = brandMatrixFor(brandName, orderTypes);
     return dayIdx != null
-      ? tiSum(hours.map(h => BRAND_HOURDAY[brandName][dayIdx][h]))
-      : tiSum(TI_DOW.map((_, d) => tiSum(hours.map(h => BRAND_HOURDAY[brandName][d][h]))));
+      ? tiSum(hours.map(h => mat[dayIdx][h]))
+      : tiSum(TI_DOW.map((_, d) => tiSum(hours.map(h => mat[d][h]))));
   }
   // sharePath = segments after the brand, e.g. [] for the brand itself,
   // ['AE'] for a country under it, ['AE','Dubai'] for a state, etc.
-  function tiNodeAgg(brandName, sharePath, hours, dayIdx, period) {
+  function tiNodeAgg(brandName, sharePath, hours, dayIdx, period, orderTypes) {
     const brand = BUS.find(b => b.name === brandName);
     if (!brand) return tiEmpty();
     let shareFrac = 1, nodeNps = brand.nps;
@@ -620,45 +694,45 @@
       const row = drilldown('NPS', parentPath).find(r => r.name === sharePath[sharePath.length - 1]);
       if (row) { shareFrac = brand.responses ? row.responses / brand.responses : 0; nodeNps = Number(row.value); }
     }
-    return tiApplyPeriod(tiRescale(tiSumBrandHours(brandName, hours, dayIdx), shareFrac, nodeNps - brand.nps), period);
+    return tiApplyPeriod(tiRescale(tiSumBrandHours(brandName, hours, dayIdx, orderTypes), shareFrac, nodeNps - brand.nps), period);
   }
   // A country's brand-wise mix (no single drilldown() path covers this
   // virtual root, so it reads COUNTRY_CONTRIB directly). Shared by the
   // single-country root and the second level under a multi-country pick.
-  function brandMixInCountry(country, hours, dayIdx, period) {
+  function brandMixInCountry(country, hours, dayIdx, period, orderTypes) {
     return (COUNTRY_CONTRIB[country] || []).map(c => {
-      const bm = tiApplyPeriod(tiRescale(tiSumBrandHours(c.brand, hours, dayIdx), c.shareFrac, c.npsDelta), period);
+      const bm = tiApplyPeriod(tiRescale(tiSumBrandHours(c.brand, hours, dayIdx, orderTypes), c.shareFrac, c.npsDelta), period);
       return { name: c.brand, n: bm.n, nps: bm.n ? tiNps(bm) : 0, lowSample: bm.n < TI_MIN_SAMPLE, path: [c.brand, country], leaf: false };
     }).sort((a, b) => b.nps - a.nps);
   }
   // Children one level below (scope, entity, drillPath). Before a brand is
   // chosen, Country-scope shows a virtual "brand mix within this country"
   // root; everything else is real drilldown() children, time-scoped.
-  function tiDrillChildren(scope, entity, drillPath, hours, dayIdx, period) {
+  function tiDrillChildren(scope, entity, drillPath, hours, dayIdx, period, orderTypes) {
     // Multiple countries selected: root breaks down by country (among just
     // the selected ones); picking one continues into that one country's
     // brand-wise mix, then a normal Country -> Zone -> State -> City -> Store walk.
     if (scope === 'Country' && entity && entity.length > 1) {
       if (!drillPath.length) {
         const rows = entity.filter(c => COUNTRY_CONTRIB[c]).map(country => {
-          const bm = tiApplyPeriod(tiSum((COUNTRY_CONTRIB[country] || []).map(c => tiRescale(tiSumBrandHours(c.brand, hours, dayIdx), c.shareFrac, c.npsDelta))), period);
+          const bm = tiApplyPeriod(tiSum((COUNTRY_CONTRIB[country] || []).map(c => tiRescale(tiSumBrandHours(c.brand, hours, dayIdx, orderTypes), c.shareFrac, c.npsDelta))), period);
           return { name: country, n: bm.n, nps: bm.n ? tiNps(bm) : 0, lowSample: bm.n < TI_MIN_SAMPLE, path: [country], leaf: false };
         }).sort((a, b) => b.nps - a.nps);
         return { level: 'Country', label: 'Country-wise breakdown', rows };
       }
       if (drillPath.length === 1 && COUNTRY_CONTRIB[drillPath[0]]) {
-        return { level: 'Brand', label: 'Brand-wise breakdown', rows: brandMixInCountry(drillPath[0], hours, dayIdx, period) };
+        return { level: 'Brand', label: 'Brand-wise breakdown', rows: brandMixInCountry(drillPath[0], hours, dayIdx, period, orderTypes) };
       }
     }
     if (!drillPath.length && scope === 'Country' && entity && entity.length === 1 && COUNTRY_CONTRIB[entity[0]]) {
-      return { level: 'Brand', label: 'Brand-wise breakdown', rows: brandMixInCountry(entity[0], hours, dayIdx, period) };
+      return { level: 'Brand', label: 'Brand-wise breakdown', rows: brandMixInCountry(entity[0], hours, dayIdx, period, orderTypes) };
     }
     // Multiple brands selected: the root shows a brand-wise breakdown among
     // just the selected brands (clicking one continues down its own
     // Country -> Zone -> State -> City -> Store hierarchy as usual).
     if (!drillPath.length && scope === 'Brand' && entity && entity.length > 1) {
       const rows = entity.map(brandName => {
-        const bm = tiNodeAgg(brandName, [], hours, dayIdx, period);
+        const bm = tiNodeAgg(brandName, [], hours, dayIdx, period, orderTypes);
         return { name: brandName, n: bm.n, nps: bm.n ? tiNps(bm) : 0, lowSample: bm.n < TI_MIN_SAMPLE, path: [brandName], leaf: false };
       }).sort((a, b) => b.nps - a.nps);
       return { level: 'Brand', label: 'Brand-wise breakdown', rows };
@@ -666,8 +740,8 @@
     const basePath = drillPath.length ? drillPath : (scope === 'Brand' && entity && entity.length ? [entity[0]] : []);
     const depth = basePath.length;
     const rows = drilldown('NPS', basePath).map(row => {
-      const bm = depth ? tiNodeAgg(basePath[0], basePath.slice(1).concat([row.name]), hours, dayIdx, period)
-        : tiNodeAgg(row.name, [], hours, dayIdx, period);
+      const bm = depth ? tiNodeAgg(basePath[0], basePath.slice(1).concat([row.name]), hours, dayIdx, period, orderTypes)
+        : tiNodeAgg(row.name, [], hours, dayIdx, period, orderTypes);
       return { name: row.name, n: bm.n, nps: bm.n ? tiNps(bm) : 0, lowSample: bm.n < TI_MIN_SAMPLE, path: basePath.concat([row.name]), leaf: !canDrill(depth) };
     }).sort((a, b) => b.nps - a.nps);
     const level = TI_LEVEL_LABELS[depth] || 'Store';
@@ -675,24 +749,24 @@
   }
   // Stats for the exact node at (scope, entity, drillPath) — null when it's
   // the un-drilled Overall root, since the slot's own total already covers it.
-  function tiDrillNode(scope, entity, drillPath, hours, dayIdx, period) {
+  function tiDrillNode(scope, entity, drillPath, hours, dayIdx, period, orderTypes) {
     // Multi-country: one country picked from the mix, brand not chosen yet
     // -> drillPath[0] is a country code here, not a brand.
     if (scope === 'Country' && entity && entity.length > 1 && drillPath.length === 1 && COUNTRY_CONTRIB[drillPath[0]]) {
-      const parts = COUNTRY_CONTRIB[drillPath[0]].map(c => tiRescale(tiSumBrandHours(c.brand, hours, dayIdx), c.shareFrac, c.npsDelta));
+      const parts = COUNTRY_CONTRIB[drillPath[0]].map(c => tiRescale(tiSumBrandHours(c.brand, hours, dayIdx, orderTypes), c.shareFrac, c.npsDelta));
       return tiApplyPeriod(tiSum(parts), period);
     }
-    if (drillPath.length) return tiNodeAgg(drillPath[0], drillPath.slice(1), hours, dayIdx, period);
+    if (drillPath.length) return tiNodeAgg(drillPath[0], drillPath.slice(1), hours, dayIdx, period, orderTypes);
     if (scope === 'Brand' && entity && entity.length) {
-      if (entity.length === 1) return tiNodeAgg(entity[0], [], hours, dayIdx, period);
-      return tiApplyPeriod(tiSum(entity.map(b => tiSumBrandHours(b, hours, dayIdx))), period);
+      if (entity.length === 1) return tiNodeAgg(entity[0], [], hours, dayIdx, period, orderTypes);
+      return tiApplyPeriod(tiSum(entity.map(b => tiSumBrandHours(b, hours, dayIdx, orderTypes))), period);
     }
     if (scope === 'Country' && entity && entity.length > 1) {
-      const parts = entity.filter(c => COUNTRY_CONTRIB[c]).reduce((acc, country) => acc.concat(COUNTRY_CONTRIB[country].map(c => tiRescale(tiSumBrandHours(c.brand, hours, dayIdx), c.shareFrac, c.npsDelta))), []);
+      const parts = entity.filter(c => COUNTRY_CONTRIB[c]).reduce((acc, country) => acc.concat(COUNTRY_CONTRIB[country].map(c => tiRescale(tiSumBrandHours(c.brand, hours, dayIdx, orderTypes), c.shareFrac, c.npsDelta))), []);
       return tiApplyPeriod(tiSum(parts), period);
     }
     if (scope === 'Country' && entity && entity.length && COUNTRY_CONTRIB[entity[0]]) {
-      const parts = COUNTRY_CONTRIB[entity[0]].map(c => tiRescale(tiSumBrandHours(c.brand, hours, dayIdx), c.shareFrac, c.npsDelta));
+      const parts = COUNTRY_CONTRIB[entity[0]].map(c => tiRescale(tiSumBrandHours(c.brand, hours, dayIdx, orderTypes), c.shareFrac, c.npsDelta));
       return tiApplyPeriod(tiSum(parts), period);
     }
     return null;
@@ -701,6 +775,44 @@
     return { nps: agg.n ? tiNps(agg) : 0, n: agg.n, lowSample: agg.n < TI_MIN_SAMPLE,
       promoter: agg.p, passive: agg.pa, detractor: agg.d,
       promoterPct: agg.n ? Math.round(agg.p / agg.n * 100) : 0, passivePct: agg.n ? Math.round(agg.pa / agg.n * 100) : 0, detractorPct: agg.n ? Math.round(agg.d / agg.n * 100) : 0 };
+  }
+
+  // ---- NPS by Order Type — a standalone "Dimension" card, not a time cut --
+  // Reuses the exact same generic engine as NPS by Time Slot (tiDrillNode /
+  // tiDrillChildren already accept an `orderTypes` filter) with two
+  // differences: no hour/day restriction (every hour of every day counts —
+  // pass the full 24h range and a null dayIdx, meaning "all days"), and the
+  // "bucket" being split on is an order type instead of a slot. Always
+  // Brand-scoped: this card's own filter is a brand picker only, no
+  // Country/market concepts apply to order type.
+  const TI_ALL_HOURS = Array.from({ length: 24 }, (_, i) => i);
+  function tiOrderTypeMetrics(entity, period) {
+    return TI_ORDER_TYPES.map(ot => {
+      const mat = tiMatrixFor('Brand', entity, [ot]);
+      const total = tiApplyPeriod(tiSum(TI_DOW.map((_, d) => tiSum(mat[d]))), period);
+      const nps = tiNps(total);
+      const prevDelta = Math.round(rng(hash('ot|' + entity.join(',') + '|' + period + '|' + ot + '|prev'))() * 16 - 8);
+      return { id: ot, name: ot, total, volume: total.n, nps, lowSample: total.n < TI_MIN_SAMPLE,
+        prevNps: Math.max(-100, Math.min(100, nps - prevDelta)), trend: prevDelta,
+        detractorPct: total.n ? Math.round((total.d / total.n) * 100) : 0 };
+    });
+  }
+  function tiOrderTypeDrilldown(entity, orderType, period) {
+    const m = tiOrderTypeMetrics(entity, period).find(x => x.id === orderType);
+    if (!m) return null;
+    const rootAgg = tiDrillNode('Brand', entity, [], TI_ALL_HOURS, null, period, [orderType]) || m.total;
+    return {
+      scope: m.name, hours: TI_ALL_HOURS, dayIdx: null, effScope: 'Brand', effEntity: entity,
+      node: tiAggToStats(rootAgg),
+      children: tiDrillChildren('Brand', entity, [], TI_ALL_HOURS, null, period, [orderType])
+    };
+  }
+  function tiOrderTypeDrillAt(entity, drillPath, orderType, period) {
+    const nodeAgg = tiDrillNode('Brand', entity, drillPath, TI_ALL_HOURS, null, period, [orderType]);
+    return {
+      node: nodeAgg && tiAggToStats(nodeAgg),
+      children: tiDrillChildren('Brand', entity, drillPath, TI_ALL_HOURS, null, period, [orderType])
+    };
   }
 
   // Opens a drill session for one slot(+day): resolves the slot/day context
@@ -743,6 +855,8 @@
     saveWeekendDays: arr => tiSet(TI_KEYS.weekend, arr),
     overview: tiOverview, slotMetrics: tiSlotMetrics, visibleSlots: tiVisibleSlots,
     weekdayWeekend: tiWeekdayWeekend, drilldown: tiDrilldown, drillAt: tiDrillAt,
+    orderTypes: TI_ORDER_TYPES.slice(), orderTypeMetrics: tiOrderTypeMetrics,
+    orderTypeDrilldown: tiOrderTypeDrilldown, orderTypeDrillAt: tiOrderTypeDrillAt,
     periodRange: tiPeriodRange, formatRange: tiFormatRange, daysBetween: tiDaysBetween, fmtISO: tiFmtISO, today: TI_TODAY,
     timezoneInfo: tiTimezoneInfo,
     aggregateAll: function (slots, scope, entity, period) {
