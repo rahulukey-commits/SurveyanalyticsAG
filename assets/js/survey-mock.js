@@ -324,24 +324,24 @@
   // Slot start/end are whole hours (0-23) — the underlying per-brand matrix
   // (BRAND_HOURDAY) is itself indexed by whole hour, so minute-level slot
   // boundaries were never actually honored; this makes the UI match reality.
-  // `market` is optional: null/unset means the slot applies to every brand
-  // (today's default, each still read in its own local time); set to one of
-  // TI_MARKETS' keys to restrict a slot to just that market's brands.
+  // Every slot belongs to exactly one of TI_MARKETS' keys — there is no
+  // "applies to every market" bucket. The shipped defaults below live under
+  // IST; GST and UK start with no slots until an admin adds their own.
   const TI_DEFAULT_SLOTS = [
-    { id: 's1', name: 'Early Morning', start: 6,  end: 9,  market: null },
-    { id: 's2', name: 'Late Morning',  start: 9,  end: 12, market: null },
-    { id: 's3', name: 'Lunch',         start: 12, end: 15, market: null },
-    { id: 's4', name: 'Afternoon',     start: 15, end: 17, market: null },
-    { id: 's5', name: 'Evening',       start: 17, end: 21, market: null },
-    { id: 's6', name: 'Night',         start: 21, end: 6,  market: null }
+    { id: 's1', name: 'Early Morning', start: 6,  end: 9,  market: 'IST' },
+    { id: 's2', name: 'Late Morning',  start: 9,  end: 12, market: 'IST' },
+    { id: 's3', name: 'Lunch',         start: 12, end: 15, market: 'IST' },
+    { id: 's4', name: 'Afternoon',     start: 15, end: 17, market: 'IST' },
+    { id: 's5', name: 'Evening',       start: 17, end: 21, market: 'IST' },
+    { id: 's6', name: 'Night',         start: 21, end: 6,  market: 'IST' }
   ];
   // Markets a slot can be restricted to — keyed the same way brandTimezone()
   // labels fixed-offset brands ('IST'/'GST'); 'UK' covers Haldiram UK's
   // date-dependent GMT/BST offset under one stable key.
   const TI_MARKETS = [
-    { key: 'IST', short: 'IST', label: 'India (IST, UTC+5:30)' },
-    { key: 'GST', short: 'GST', label: 'UAE (GST, UTC+4:00)' },
-    { key: 'UK',  short: 'UK',  label: 'UK (GMT/BST)' }
+    { key: 'IST', short: 'IST', label: 'India (IST, UTC+5:30)', iana: 'Asia/Kolkata' },
+    { key: 'GST', short: 'GST', label: 'UAE (GST, UTC+4:00)', iana: 'Asia/Dubai' },
+    { key: 'UK',  short: 'UK',  label: 'UK (GMT/BST)', iana: 'Europe/London' }
   ];
   function marketKeyForBrand(brandName) {
     if (brandName === 'Haldiram UK') return 'UK';
@@ -849,7 +849,10 @@
     MIN_SAMPLE: TI_MIN_SAMPLE, DOW: TI_DOW, DEFAULT_SLOTS: TI_DEFAULT_SLOTS, PERIODS: TI_PERIODS,
     MARKETS: TI_MARKETS, marketKeyForBrand, marketLabel,
     countryList: COUNTRY_LIST.slice(),
-    getSlots: () => tiGet(TI_KEYS.slots, TI_DEFAULT_SLOTS.slice()),
+    // Defensive migration: any slot persisted before markets were mandatory
+    // (market: null, meaning "applies everywhere") is folded into the first
+    // real market rather than left in a now-invalid state.
+    getSlots: () => tiGet(TI_KEYS.slots, TI_DEFAULT_SLOTS.slice()).map(s => s.market ? s : Object.assign({}, s, { market: TI_MARKETS[0].key })),
     saveSlots: s => tiSet(TI_KEYS.slots, s),
     getWeekendDays: tiWeekendDays,
     saveWeekendDays: arr => tiSet(TI_KEYS.weekend, arr),

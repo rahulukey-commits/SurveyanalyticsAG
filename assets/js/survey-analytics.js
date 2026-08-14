@@ -466,6 +466,8 @@
       const npsCol = v => v >= 50 ? '#22c55e' : v >= 1 ? '#f59e0b' : '#ef4444';
       const arrow = t => t > 1 ? `<span style="color:#22c55e">+${t}% ↗</span>` : t < -1 ? `<span style="color:#ef4444">${t}% ↘</span>` : `<span class="muted">0%</span>`;
       const fmtHour = h => String(h).padStart(2, '0') + ':00';
+      // A hidden-by-low-sample cell — the dash needs a reason, not just a dash.
+      const dashTip = () => `<span class="muted" title="Hidden — below the ${TI.MIN_SAMPLE}-response threshold.">—</span>`;
       // Drill sections (NPS by Time Slot, NPS by Order Type) are each built
       // by makeDrillSection() further below — same stacked-levels UI, same
       // toggle-close behavior, parameterized by how to open/continue a
@@ -508,15 +510,21 @@
           const searchRow = el('<div class="sa-brand-search"><input type="text" placeholder="Search Brands…"/><span class="sa-brand-search-ic">🔍</span></div>');
           const bulkRow = el('<div></div>');
           const listWrap = el('<div></div>');
-          menu.appendChild(searchRow); menu.appendChild(bulkRow); menu.appendChild(listWrap);
+          const hintRow = el('<div class="sa-brand-hint" style="display:none">At least one brand must stay selected.</div>');
+          menu.appendChild(searchRow); menu.appendChild(bulkRow); menu.appendChild(listWrap); menu.appendChild(hintRow);
+          let hintTimer = null;
+          function flashHint() { hintRow.style.display = ''; clearTimeout(hintTimer); hintTimer = setTimeout(() => { hintRow.style.display = 'none'; }, 2200); }
           function paintMenu() {
             const names = API.brandNames.filter(n => !q.trim() || n.toLowerCase().indexOf(q.trim().toLowerCase()) >= 0);
             const allOn = names.length > 0 && names.every(n => state.entity.indexOf(n) >= 0);
             bulkRow.innerHTML = '';
             const bulkBtn = el(`<div class="mi"><b>${allOn ? 'Deselect All' : 'Select All'}</b></div>`);
             bulkBtn.addEventListener('click', () => {
-              if (allOn) { state.entity = state.entity.filter(n => names.indexOf(n) < 0); if (!state.entity.length) state.entity = [names[0] || API.brandNames[0]]; }
-              else { const set = new Set(state.entity); names.forEach(n => set.add(n)); state.entity = Array.from(set); }
+              if (allOn) {
+                const remaining = state.entity.filter(n => names.indexOf(n) < 0);
+                if (!remaining.length) { flashHint(); state.entity = [names[0]]; }
+                else state.entity = remaining;
+              } else { const set = new Set(state.entity); names.forEach(n => set.add(n)); state.entity = Array.from(set); }
               paintBtn(); paintMenu(); onChange();
             });
             bulkRow.appendChild(bulkBtn);
@@ -527,7 +535,7 @@
               const item = el(`<div class="mi ${on ? 'checked' : ''}">${n}${on ? '<span class="ck">✓</span>' : ''}</div>`);
               item.addEventListener('click', () => {
                 const i = state.entity.indexOf(n);
-                if (i >= 0) { if (state.entity.length > 1) state.entity.splice(i, 1); }
+                if (i >= 0) { if (state.entity.length > 1) state.entity.splice(i, 1); else { flashHint(); return; } }
                 else state.entity.push(n);
                 paintBtn(); paintMenu(); onChange();
               });
@@ -557,23 +565,38 @@
       // Period filter + its date-range readout; picking Custom swaps the
       // readout for two date inputs.
       function periodRangeControl(state, onChange) {
-        const wrap = el('<div style="display:flex;align-items:center;gap:8px;"></div>');
+        const wrap = el('<div style="position:relative;display:inline-flex;"></div>');
+        const row = el('<div style="display:flex;align-items:center;gap:8px;"></div>');
+        const note = el('<div class="sa-field-note" style="display:none"></div>');
+        wrap.appendChild(row); wrap.appendChild(note);
+        function showNote(text, kind) { note.textContent = text; note.className = 'sa-field-note' + (kind ? ' ' + kind : ''); note.style.display = ''; }
+        function hideNote() { note.style.display = 'none'; }
         function paint() {
-          wrap.innerHTML = '';
-          wrap.appendChild(U.selectEl(state.period, TI.PERIODS, state.period, v => {
+          row.innerHTML = ''; hideNote();
+          row.appendChild(U.selectEl(state.period, TI.PERIODS, state.period, v => {
             state.period = v;
-            if (v === 'Custom' && !state.customFrom) { const r = TI.periodRange('Last 7 Days'); state.customFrom = TI.fmtISO(r[0]); state.customTo = TI.fmtISO(r[1]); }
+            if (v === 'Custom' && !state.customFrom) {
+              const r = TI.periodRange('Last 7 Days'); state.customFrom = TI.fmtISO(r[0]); state.customTo = TI.fmtISO(r[1]);
+              paint(); onChange(); showNote('Defaulted to the last 7 days — adjust below.', 'sa-field-note-info'); return;
+            }
             paint(); onChange();
           }));
           if (state.period === 'Custom') {
             const fromI = el(`<input type="date" class="sa-search" style="min-width:0" value="${state.customFrom}"/>`);
             const toI = el(`<input type="date" class="sa-search" style="min-width:0" value="${state.customTo}"/>`);
-            fromI.addEventListener('change', () => { state.customFrom = fromI.value; onChange(); });
-            toI.addEventListener('change', () => { state.customTo = toI.value; onChange(); });
-            wrap.appendChild(fromI); wrap.appendChild(el('<span class="muted">to</span>')); wrap.appendChild(toI);
+            function validateRange() {
+              if (toI.value && fromI.value && toI.value < fromI.value) { showNote('"To" date is before "From" — pick a "To" date on or after it.', 'sa-field-note-error'); return false; }
+              const days = TI.daysBetween(fromI.value, toI.value);
+              if (days > 150) { showNote(`${days}-day range — estimates beyond ~5 months use a capped volume model.`, 'sa-field-note-info'); return true; }
+              hideNote(); return true;
+            }
+            fromI.addEventListener('change', () => { state.customFrom = fromI.value; validateRange(); onChange(); });
+            toI.addEventListener('change', () => { state.customTo = toI.value; validateRange(); onChange(); });
+            row.appendChild(fromI); row.appendChild(el('<span class="muted">to</span>')); row.appendChild(toI);
+            validateRange();
           } else {
             const [from, to] = TI.periodRange(state.period);
-            wrap.appendChild(el(`<div class="sa-daterange">${TI.formatRange(from, to)}</div>`));
+            row.appendChild(el(`<div class="sa-daterange">${TI.formatRange(from, to)}</div>`));
           }
         }
         paint();
@@ -723,7 +746,7 @@
             const isSel = slotDrill.isSelected(m.id);
             const tr = el(`<tr class="sa-rowlink" tabindex="0" ${isSel ? 'style="background:var(--hover)"' : ''}><td><b>${m.name}</b></td><td class="muted">${fmtHour(m.start)}–${fmtHour(m.end)}</td>
               <td class="ta-r">${cell}</td><td class="ta-r">${fmt(m.volume)}</td>
-              <td class="ta-r">${m.lowSample ? '—' : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? '—' : m.detractorPct + '%'}</td></tr>`);
+              <td class="ta-r">${m.lowSample ? dashTip() : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? dashTip() : m.detractorPct + '%'}</td></tr>`);
             const toggle = () => { slotDrill.toggle(m.id); drawSlots(metrics); };
             tr.addEventListener('click', toggle);
             tr.addEventListener('keydown', e => { if (e.key === 'Enter') toggle(); });
@@ -755,7 +778,7 @@
             const isSel = otDrill.isSelected(m.id);
             const tr = el(`<tr class="sa-rowlink" tabindex="0" ${isSel ? 'style="background:var(--hover)"' : ''}><td><b>${m.name}</b></td>
               <td class="ta-r">${cell}</td><td class="ta-r">${fmt(m.volume)}</td>
-              <td class="ta-r">${m.lowSample ? '—' : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? '—' : m.detractorPct + '%'}</td></tr>`);
+              <td class="ta-r">${m.lowSample ? dashTip() : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? dashTip() : m.detractorPct + '%'}</td></tr>`);
             const toggle = () => { otDrill.toggle(m.id); drawOT(); };
             tr.addEventListener('click', toggle);
             tr.addEventListener('keydown', e => { if (e.key === 'Enter') toggle(); });
@@ -794,11 +817,11 @@
           rows.forEach(r => {
             ['n', 'p', 'd'].forEach(k => { tot.wd[k] += r.wd[k]; tot.we[k] += r.we[k]; });
             const dl = (r.lowWeekday || r.lowWeekend) ? null : r.weekendNps - r.weekdayNps;
-            const c = (nps, low) => low ? '<span class="sa-lowpill">Low</span>' : `<span style="color:${npsCol(nps)};font-weight:600">${nps}</span>`;
+            const c = (nps, low) => low ? '<span class="sa-lowpill">Low sample</span>' : `<span style="color:${npsCol(nps)};font-weight:600">${nps}</span>`;
             tb.appendChild(el(`<tr><td><b>${r.name}</b><div class="muted sa-sub">${fmtHour(r.start)}–${fmtHour(r.end)}</div></td>
               <td class="ta-r">${c(r.weekdayNps, r.lowWeekday)}</td><td class="ta-r">${fmt(r.wd.n)}</td>
               <td class="ta-r">${c(r.weekendNps, r.lowWeekend)}</td><td class="ta-r">${fmt(r.we.n)}</td>
-              <td class="ta-r">${dl === null ? '—' : `<b style="color:${dl >= 0 ? '#22c55e' : '#ef4444'}">${dl > 0 ? '+' : ''}${dl}</b>`}</td></tr>`));
+              <td class="ta-r">${dl === null ? dashTip() : `<b style="color:${dl >= 0 ? '#22c55e' : '#ef4444'}">${dl > 0 ? '+' : ''}${dl}</b>`}</td></tr>`));
           });
           const dT = (tot.wd.n && tot.we.n) ? npsA(tot.we) - npsA(tot.wd) : 0;
           tb.appendChild(el(`<tr class="sa-totalrow"><td><b>All slots</b></td>
@@ -837,59 +860,115 @@
         for (let h = 0; h < 24; h++) html += `<option value="${h}" ${+sel === h ? 'selected' : ''}>${fmtHour(h)}</option>`;
         return html;
       }
-      function marketOptions(sel) {
-        let html = `<option value="" ${!sel ? 'selected' : ''}>All markets</option>`;
-        TI.MARKETS.forEach(mk => { html += `<option value="${mk.key}" ${sel === mk.key ? 'selected' : ''}>${mk.label}</option>`; });
-        return html;
-      }
+      // Display name for a market: its real IANA zone. Every slot belongs to
+      // exactly one market — there is no "all markets" catch-all.
+      function marketDisplay(key) { const m = TI.MARKETS.find(mk => mk.key === key); return m ? m.iana : key; }
       function openSlotModal() {
         const { m } = modal('⚙ Slot Configuration', 820);
-        m.appendChild(el('<div class="muted sa-sub" style="margin-bottom:12px">Define custom time slots (persisted). Editing re-maps all data and refreshes every view. Leave Market as "All markets" for a slot that applies to every brand (each still read in its own local time) — pick one market to restrict a slot to just that market\'s brands.</div>'));
+        m.appendChild(el('<div class="muted sa-sub" style="margin-bottom:12px">Define custom time slots (persisted). Editing re-maps all data and refreshes every view. Time Zone picks which market you\'re viewing and editing below — every slot belongs to exactly one market, so switching it never edits another market\'s slots.</div>'));
+        // One Time Zone selector for the whole modal — it decides which
+        // market's slot list is shown/edited below, it does NOT translate
+        // times between zones. Each market's slots are fully independent;
+        // there is no unrestricted/"all markets" bucket.
+        let viewMarket = TI.MARKETS[0].key;
+        const tzRow = el(`<div class="sa-tz-row"><div class="sa-tz-label">Time Zone</div></div>`);
+        const tzSelectHolder = el('<div></div>');
+        const tzNote = el('<div class="muted sa-sub" style="margin:0">Shows this market\'s slot list only.</div>');
+        tzRow.appendChild(tzSelectHolder); tzRow.appendChild(tzNote);
+        m.appendChild(tzRow);
+        const status = el('<div class="sa-status-note" style="display:none"></div>');
+        const countWarn = el('<div class="sa-field-note sa-field-note-info" style="display:none;margin-bottom:10px"></div>');
+        m.appendChild(status); m.appendChild(countWarn);
         const tl = el('<div></div>'), list = el('<div class="sa-slotlist"></div>'), err = el('<div class="sa-err" style="display:none"></div>');
         m.appendChild(tl); m.appendChild(list); m.appendChild(err);
         const add = el(`<div class="sa-addrow"><input class="sa-search" id="sn" placeholder="Slot name" style="min-width:130px"/>
           <select class="sa-search" id="ss">${hourOptions(8)}</select><span class="muted">to</span><select class="sa-search" id="se">${hourOptions(12)}</select>
-          <select class="sa-search" id="smk">${marketOptions('')}</select>
+          <span class="muted sa-slot-tz"></span>
           <button class="sa-outline" id="sa-add">Add slot</button></div>`);
         m.appendChild(add);
+        function paintTzSelect() {
+          tzSelectHolder.innerHTML = '';
+          const options = TI.MARKETS.map(mk => mk.iana);
+          tzSelectHolder.appendChild(U.selectEl(marketDisplay(viewMarket), options, marketDisplay(viewMarket), v => {
+            viewMarket = TI.MARKETS.find(mk => mk.iana === v).key;
+            paintTzSelect(); redraw();
+          }));
+        }
+        let statusTimer = null;
+        function flashStatus(text) { status.textContent = text; status.style.display = ''; clearTimeout(statusTimer); statusTimer = setTimeout(() => { status.style.display = 'none'; }, 2500); }
+        const SLOT_COUNT_WARNING = 10;
+        function updateCountWarning() {
+          if (slots.length > SLOT_COUNT_WARNING) { countWarn.textContent = `You have ${slots.length} slots across all markets — consider consolidating for readability.`; countWarn.style.display = ''; }
+          else countWarn.style.display = 'none';
+        }
         function redraw() {
-          tl.innerHTML = ''; tl.appendChild(timeline(slots));
+          updateCountWarning();
+          $('.sa-slot-tz', add).textContent = marketDisplay(viewMarket);
+          // Every slot belongs to exactly one market, so this is a plain
+          // exact match — switching Time Zone only changes which market's
+          // own slots are shown; it never hides, edits, or deletes any slot.
+          const visible = slots.filter(s => s.market === viewMarket);
+          tl.innerHTML = ''; tl.appendChild(timeline(visible));
           list.innerHTML = '';
-          slots.forEach(s => {
+          visible.forEach(s => {
             const row = el(`<div class="sa-slotrow"><input class="sa-search f-n" value="${s.name}" style="min-width:110px"/>
               <select class="sa-search f-s">${hourOptions(s.start)}</select><span class="muted">–</span><select class="sa-search f-e">${hourOptions(s.end)}</select>
-              <select class="sa-search f-mk">${marketOptions(s.market || '')}</select>
+              <span class="muted sa-slot-tz">${marketDisplay(s.market)}</span>
               <span class="muted sa-dur"></span><span style="flex:1"></span>
               <button class="sa-linkbtn f-save">Save</button><button class="sa-linkbtn f-del" style="color:#ef4444">Delete</button>
               <div class="sa-err f-err" style="display:none;flex-basis:100%"></div></div>`);
             const upd = () => $('.sa-dur', row).textContent = dur($('.f-s', row).value, $('.f-e', row).value);
             upd(); ['.f-s', '.f-e'].forEach(q => $(q, row).addEventListener('change', upd));
             $('.f-save', row).addEventListener('click', () => {
-              const nx = { id: s.id, name: $('.f-n', row).value.trim() || s.name, start: +$('.f-s', row).value, end: +$('.f-e', row).value, market: $('.f-mk', row).value || null };
+              const nameVal = $('.f-n', row).value.trim();
+              const nx = { id: s.id, name: nameVal || s.name, start: +$('.f-s', row).value, end: +$('.f-e', row).value, market: s.market };
               const e2 = validate(slots.filter(x => x.id !== s.id), nx);
-              if (e2) { $('.f-err', row).textContent = e2; $('.f-err', row).style.display = ''; return; }
+              if (e2) { $('.f-err', row).className = 'sa-err f-err'; $('.f-err', row).textContent = e2; $('.f-err', row).style.display = ''; return; }
               slots = slots.map(x => x.id === s.id ? nx : x); TI.saveSlots(slots); redraw(); refreshAll();
+              flashStatus(nameVal ? 'Changes saved.' : `Name left blank — kept "${s.name}".`);
             });
-            $('.f-del', row).addEventListener('click', () => { slots = slots.filter(x => x.id !== s.id); TI.saveSlots(slots); redraw(); refreshAll(); });
+            // Delete needs a confirm step: first click arms it (button turns
+            // red and says "Confirm delete?"), second click within 4s deletes.
+            // Clicking anything else, or letting it time out, disarms it.
+            let armed = false, armTimer = null;
+            $('.f-del', row).addEventListener('click', () => {
+              if (!armed) {
+                armed = true; $('.f-del', row).textContent = 'Confirm delete?'; $('.f-del', row).style.fontWeight = '700';
+                clearTimeout(armTimer);
+                armTimer = setTimeout(() => { armed = false; $('.f-del', row).textContent = 'Delete'; $('.f-del', row).style.fontWeight = ''; }, 4000);
+                return;
+              }
+              clearTimeout(armTimer);
+              slots = slots.filter(x => x.id !== s.id); TI.saveSlots(slots); redraw(); refreshAll();
+              flashStatus(`"${s.name}" deleted.`);
+            });
             list.appendChild(row);
           });
         }
         $('#sa-add', add).addEventListener('click', () => {
-          const nx = { id: 's' + Date.now(), name: $('#sn', add).value.trim() || 'New slot', start: +$('#ss', add).value, end: +$('#se', add).value, market: $('#smk', add).value || null };
+          const nameVal = $('#sn', add).value.trim();
+          const nx = { id: 's' + Date.now(), name: nameVal || 'New slot', start: +$('#ss', add).value, end: +$('#se', add).value, market: viewMarket };
           const e2 = validate(slots, nx);
-          if (e2) { err.textContent = e2; err.style.display = ''; return; }
+          if (e2) { err.className = 'sa-err'; err.textContent = e2; err.style.display = ''; return; }
           err.style.display = 'none'; $('#sn', add).value = '';
           slots = slots.concat([nx]); TI.saveSlots(slots); redraw(); refreshAll();
+          flashStatus(nameVal ? `"${nx.name}" added.` : 'Name left blank — added as "New slot".');
         });
+        paintTzSelect();
         redraw();
       }
       function openWeekendModal() {
         const { m } = modal('⚙ Weekend Days', 440);
         m.appendChild(el('<div class="muted sa-sub" style="margin-bottom:14px">Select which days count as weekend.</div>'));
-        const g = el('<div class="sa-chip-row"></div>'); m.appendChild(g);
+        const g = el('<div class="sa-chip-row"></div>');
+        const warn = el('<div class="sa-field-note sa-field-note-warning" style="display:none;margin-top:12px"></div>');
+        m.appendChild(g); m.appendChild(warn);
         (function paintChips() {
           g.innerHTML = '';
           const wkd = TI.getWeekendDays();
+          if (!wkd.length) { warn.textContent = 'No days marked as weekend — the Weekend column will be empty.'; warn.style.display = ''; }
+          else if (wkd.length === TI.DOW.length) { warn.textContent = 'All seven days marked as weekend — the Weekday column will be empty.'; warn.style.display = ''; }
+          else warn.style.display = 'none';
           TI.DOW.forEach((dn, i) => {
             const on = wkd.indexOf(i) >= 0;
             const c = el(`<button class="sa-daychip ${on ? 'on' : ''}" aria-pressed="${on}">${dn}</button>`);
@@ -1000,8 +1079,12 @@
             wrap.appendChild(el(`<div class="empty"><div class="big">Low sample (${fmt(at.node.n)})</div><div>Below the ${TI.MIN_SAMPLE}-response threshold.</div></div>`));
             return wrap;
           }
-          wrap.appendChild(bandLegend());
           const barRows = at.children.rows.map(r => Object.assign({}, r, { value: r.nps, responses: r.n }));
+          if (!barRows.length) {
+            wrap.appendChild(el('<div class="empty"><div class="big">No data to show at this level.</div></div>'));
+            return wrap;
+          }
+          wrap.appendChild(bandLegend());
           const selectedHere = drillPath[depth] || null;
           const canDrillHere = barRows.length && !barRows[0].leaf;
           const box = el(`<div class="chart" style="height:${Math.max(160, barRows.length * 38 + 60)}px"></div>`);

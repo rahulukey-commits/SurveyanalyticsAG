@@ -207,7 +207,7 @@ a { color: var(--brand); text-decoration: none; }
 .senti-vs { color: var(--ink-3); margin-top: 2px; }
 
 /* tooltip dropdown menu */
-.menu { position: fixed; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-pop); padding: 6px; z-index: 600; min-width: 180px; max-height: 320px; overflow-y: auto; }
+.menu { position: fixed; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-pop); padding: 6px; z-index: 700; min-width: 180px; max-height: 320px; overflow-y: auto; }
 .menu .mi { padding: 9px 12px; border-radius: 7px; cursor: pointer; color: var(--ink); display: flex; align-items: center; gap: 8px; }
 .menu .mi:hover { background: var(--hover); }
 .menu .mi .ck { margin-left: auto; color: var(--brand); }
@@ -220,6 +220,16 @@ a { color: var(--brand); text-decoration: none; }
 .sa-brand-search input::placeholder { color: var(--ink-3); }
 .sa-brand-search input:focus { border-bottom-color: var(--brand); }
 .sa-brand-search-ic { position: absolute; right: 4px; top: 8px; color: var(--ink-3); font-size: 13px; pointer-events: none; }
+.sa-brand-hint { padding: 8px 12px; margin-top: 4px; font-size: 12px; color: #92400e; background: #fef3c7; border-radius: 8px; }
+
+/* Field-level validation/info notes — floats below a filter control without
+   shifting its siblings; three tones share one shape. */
+.sa-field-note { position: absolute; top: 100%; left: 0; margin-top: 4px; padding: 5px 10px; border-radius: 7px; font-size: 11.5px; white-space: nowrap; z-index: 5; box-shadow: var(--shadow-pop); }
+.sa-field-note-info { background: #eef2ff; color: #3730a3; }
+.sa-field-note-error { background: #fde7e7; color: #c23434; }
+.sa-field-note-warning { background: #fef3c7; color: #92400e; }
+/* Transient success/confirmation line inside a settings modal. */
+.sa-status-note { background: #ecfdf5; color: #067647; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px; font-weight: 600; }
 
 /* footer */
 .footer { grid-column: 1 / 3; display: flex; align-items: center; gap: 14px; padding: 14px 26px; border-top: 1px solid var(--line); background: var(--surface); color: var(--ink-3); }
@@ -436,6 +446,9 @@ body.sa-noscroll { overflow: hidden; }
 .sa-slotrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
 .sa-slotrow .sa-search { min-width: 78px; }
 .sa-addrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
+.sa-tz-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--hover); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; }
+.sa-tz-label { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); font-weight: 700; }
+.sa-slot-tz { min-width: 96px; }
 .sa-daychip { border: 1px solid var(--line); background: var(--surface); border-radius: 20px; padding: 7px 15px; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--ink-2); font-family: inherit; }
 .sa-daychip.on { background: #7C3AED; border-color: #7C3AED; color: #fff; }
 .sa-timeline { position: relative; height: 46px; background: #F4EFFE; border-radius: 8px; margin: 6px 0 24px; }
