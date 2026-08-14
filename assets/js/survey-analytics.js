@@ -38,7 +38,7 @@
       { k: 'improve',   label: 'Area Of Improvements',  fn: renderImprove },
       { k: 'compare',   label: 'Metrics Comparison',    fn: renderCompare },
       { k: 'channel',   label: 'Channel Analysis',      fn: renderChannel },
-      { k: 'time',      label: 'Time Intelligence',     fn: renderTimeIntel }
+      { k: 'time',      label: 'Time & Order Intelligence', fn: renderTimeIntel }
     ];
     TOPS.forEach(t => {
       const tab = el(`<button class="sa-toptab ${t.k === state.top ? 'active' : ''}" role="tab" data-k="${t.k}">${t.label}</button>`);
@@ -625,7 +625,8 @@
 
       // ---- NPS by Time Slot (Table ⇄ Chart) --------------------------------
       const slotCard = el('<section class="sa-card"></section>');
-      const sHead = el(`<div class="card-head" style="margin-bottom:8px"><div class="sa-h4" style="margin:0">NPS by Time Slot</div><div class="right"></div></div>`);
+      const sHead = el(`<div class="card-head" style="margin-bottom:8px"><div class="sa-h4" style="margin:0">NPS by Time Slot <span class="sa-scope-ic" data-tip="">📍</span></div><div class="right"></div></div>`);
+      const slotScopeIc = $('.sa-scope-ic', sHead);
       const tblT = el('<button class="sa-tool sa-tool-active" title="Table">☰</button>');
       const chtT = el('<button class="sa-tool" title="Chart">▥</button>');
       tblT.addEventListener('click', () => { vs.slotView = 'table'; tblT.classList.add('sa-tool-active'); chtT.classList.remove('sa-tool-active'); drawSlots(); });
@@ -648,30 +649,50 @@
         id => TI.drilldown(slots, mainF.scope, mainF.entity, effectivePeriod(mainF), id, null),
         (dd, path) => TI.drillAt(dd.effScope, dd.effEntity, path, dd.hours, dd.dayIdx, effectivePeriod(mainF)));
 
+      // ---- Weekday vs Weekend (own filter + ⚙, all in one row) ------------
+      const wwCard = el('<section class="sa-card"></section>');
+      const wTblT = el('<button class="sa-tool sa-tool-active" title="Table">☰</button>');
+      const wChtT = el('<button class="sa-tool" title="Chart">▥</button>');
+      wTblT.addEventListener('click', () => { vs.wwView = 'table'; wTblT.classList.add('sa-tool-active'); wChtT.classList.remove('sa-tool-active'); drawWW(); });
+      wChtT.addEventListener('click', () => { vs.wwView = 'chart'; wChtT.classList.add('sa-tool-active'); wTblT.classList.remove('sa-tool-active'); drawWW(); });
+      const wGear = el('<button class="sa-tool" title="Configure weekend days">⚙ Weekend days</button>');
+      wGear.addEventListener('click', openWeekendModal);
+      const wwFilters = el(`<div class="sa-filters" style="margin-top:0"><div class="sa-h4" style="margin:0;white-space:nowrap">Weekday vs Weekend <span class="sa-scope-ic" data-tip="">📍</span></div></div>`);
+      const wwScopeIc = $('.sa-scope-ic', wwFilters);
+      wwFilters.appendChild(el('<span style="flex:1"></span>'));
+      wwFilters.appendChild(wTblT); wwFilters.appendChild(wChtT); wwFilters.appendChild(wGear);
+      wwFilters.appendChild(periodRangeControl(wwF, () => debounceWW()));
+      const wwScopeEntity = scopeEntityControl(wwF, () => debounceWW());
+      wwFilters.appendChild(wwScopeEntity.row);
+      wwCard.appendChild(wwFilters);
+      wwCard.appendChild(wwScopeEntity.chips);
+      const wwBody = el('<div></div>');
+      wwCard.appendChild(wwBody);
+      host.appendChild(wwCard);
+
+      host.appendChild(el('<hr class="sa-ti-divider"/>'));
+
       // ---- NPS by Order Type (own independent filter, own drilldown) ------
       // A standalone "Dimension" card, not a time cut — Dine-in vs Takeaway,
       // fixed rows (no ⚙ config, since order type is a bill field, not
-      // something an admin defines). Sits right after NPS by Time Slot: both
-      // support the full drilldown, Weekday vs Weekend (no drilldown) closes
-      // the page out.
+      // something an admin defines). Kept as the last card on the page,
+      // set off by a divider, since it's a different dimension (order type)
+      // from the time-based cards above it.
       const otF = { entity: API.brandNames.slice(), period: 'This Month' };
       const otVs = { view: 'table' };
       const otCard = el('<section class="sa-card"></section>');
-      const otHead = el(`<div class="card-head" style="margin-bottom:8px"><div class="sa-h4" style="margin:0">NPS by Order Type</div><div class="right"></div></div>`);
       const otTblT = el('<button class="sa-tool sa-tool-active" title="Table">☰</button>');
       const otChtT = el('<button class="sa-tool" title="Chart">▥</button>');
       otTblT.addEventListener('click', () => { otVs.view = 'table'; otTblT.classList.add('sa-tool-active'); otChtT.classList.remove('sa-tool-active'); drawOT(); });
       otChtT.addEventListener('click', () => { otVs.view = 'chart'; otChtT.classList.add('sa-tool-active'); otTblT.classList.remove('sa-tool-active'); drawOT(); });
-      $('.right', otHead).appendChild(otTblT); $('.right', otHead).appendChild(otChtT);
-      otCard.appendChild(otHead);
-      const otFilters = el('<div class="sa-filters" style="margin-top:0"></div>');
+      const otFilters = el(`<div class="sa-filters" style="margin-top:0"><div class="sa-h4" style="margin:0;white-space:nowrap">NPS by Order Type <span class="sa-scope-ic" data-tip="Global — all markets">🌐</span></div></div>`);
       otFilters.appendChild(el('<span style="flex:1"></span>'));
+      otFilters.appendChild(otTblT); otFilters.appendChild(otChtT);
       otFilters.appendChild(periodRangeControl(otF, () => { otDrill.reset(); debounceOT(); }));
       const otScopeEntity = scopeEntityControl(otF, () => { otDrill.reset(); debounceOT(); });
       otFilters.appendChild(otScopeEntity.row);
       otCard.appendChild(otFilters);
       otCard.appendChild(otScopeEntity.chips);
-      otCard.appendChild(el('<div class="muted sa-sub" style="margin-bottom:10px">Uses its own filters — independent of the section above.</div>'));
       otCard.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on Dine-in or Takeaway to drill down to brands, countries, zones, states, cities and stores.</div>`));
       const otBody = el('<div></div>');
       otCard.appendChild(otBody);
@@ -686,27 +707,6 @@
         // dd.scope is just the order type string itself here (tiOrderTypeDrilldown
         // sets it to the metric's own name, with no "· Day" suffix like slots get).
         (dd, path) => TI.orderTypeDrillAt(otF.entity, path, dd.scope, effectivePeriod(otF)));
-
-      // ---- Weekday vs Weekend (own filter + ⚙, all in one row) ------------
-      const wwCard = el('<section class="sa-card"></section>');
-      const wTblT = el('<button class="sa-tool sa-tool-active" title="Table">☰</button>');
-      const wChtT = el('<button class="sa-tool" title="Chart">▥</button>');
-      wTblT.addEventListener('click', () => { vs.wwView = 'table'; wTblT.classList.add('sa-tool-active'); wChtT.classList.remove('sa-tool-active'); drawWW(); });
-      wChtT.addEventListener('click', () => { vs.wwView = 'chart'; wChtT.classList.add('sa-tool-active'); wTblT.classList.remove('sa-tool-active'); drawWW(); });
-      const wGear = el('<button class="sa-tool" title="Configure weekend days">⚙ Weekend days</button>');
-      wGear.addEventListener('click', openWeekendModal);
-      const wwFilters = el(`<div class="sa-filters" style="margin-top:0"><div class="sa-h4" style="margin:0;white-space:nowrap">Weekday vs Weekend</div></div>`);
-      wwFilters.appendChild(el('<span style="flex:1"></span>'));
-      wwFilters.appendChild(wTblT); wwFilters.appendChild(wChtT); wwFilters.appendChild(wGear);
-      wwFilters.appendChild(periodRangeControl(wwF, () => debounceWW()));
-      const wwScopeEntity = scopeEntityControl(wwF, () => debounceWW());
-      wwFilters.appendChild(wwScopeEntity.row);
-      wwCard.appendChild(wwFilters);
-      wwCard.appendChild(wwScopeEntity.chips);
-      wwCard.appendChild(el('<div class="muted sa-sub" style="margin-bottom:10px">Uses its own filters — independent of the section above.</div>'));
-      const wwBody = el('<div></div>');
-      wwCard.appendChild(wwBody);
-      host.appendChild(wwCard);
 
       // ---- render pipeline -------------------------------------------------
       let mt = null, wt = null, ot = null;
@@ -975,7 +975,12 @@
           });
         })();
       }
-      function refreshAll() { gearBtn.innerHTML = `⚙ Slots <span class="muted">(${slots.length})</span>`; drawMain(); drawWW(); }
+      function currentMarketLabel() { return slots.length ? marketDisplay(slots[0].market) : 'No slots configured'; }
+      function refreshAll() {
+        gearBtn.innerHTML = `⚙ Slots <span class="muted">(${slots.length})</span>`;
+        slotScopeIc.dataset.tip = currentMarketLabel(); wwScopeIc.dataset.tip = currentMarketLabel();
+        drawMain(); drawWW();
+      }
 
       function timeline(sl) {
         const w = el('<div class="sa-timeline"></div>');
@@ -1112,6 +1117,7 @@
         return { toggle, reset, render, isSelected };
       }
 
+      slotScopeIc.dataset.tip = currentMarketLabel(); wwScopeIc.dataset.tip = currentMarketLabel();
       drawMain(); drawWW(); drawOT();
     }
 
