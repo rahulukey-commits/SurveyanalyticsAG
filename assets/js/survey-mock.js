@@ -324,21 +324,19 @@
   // Slot start/end are whole hours (0-23) — the underlying per-brand matrix
   // (BRAND_HOURDAY) is itself indexed by whole hour, so minute-level slot
   // boundaries were never actually honored; this makes the UI match reality.
-  // Every slot belongs to exactly one market — there is no "applies to every
-  // market" bucket. Each of IST/GST/UK ships with its own independent copy
-  // of the same 6 slots below, so switching Time Zone never looks like
-  // slots went missing; each market's copy can then be edited separately.
-  const TI_DEFAULT_SLOT_TEMPLATE = [
-    { name: 'Early Morning', start: 6,  end: 9 },
-    { name: 'Late Morning',  start: 9,  end: 12 },
-    { name: 'Lunch',         start: 12, end: 15 },
-    { name: 'Afternoon',     start: 15, end: 17 },
-    { name: 'Evening',       start: 17, end: 21 },
-    { name: 'Night',         start: 21, end: 6 }
+  // One flat list of slots shared by the whole app — there's no per-market
+  // list. Every slot carries the same `market` tag (which market's brands
+  // this configuration currently belongs to); switching Time Zone in Slot
+  // Configuration re-tags every slot at once, it never filters or forks
+  // into separate lists.
+  const TI_DEFAULT_SLOTS = [
+    { id: 's1', name: 'Early Morning', start: 6,  end: 9,  market: 'IST' },
+    { id: 's2', name: 'Late Morning',  start: 9,  end: 12, market: 'IST' },
+    { id: 's3', name: 'Lunch',         start: 12, end: 15, market: 'IST' },
+    { id: 's4', name: 'Afternoon',     start: 15, end: 17, market: 'IST' },
+    { id: 's5', name: 'Evening',       start: 17, end: 21, market: 'IST' },
+    { id: 's6', name: 'Night',         start: 21, end: 6,  market: 'IST' }
   ];
-  const TI_DEFAULT_SLOTS = ['IST', 'GST', 'UK'].flatMap(mk =>
-    TI_DEFAULT_SLOT_TEMPLATE.map((t, i) => Object.assign({ id: `s-${mk.toLowerCase()}-${i + 1}`, market: mk }, t))
-  );
   // Markets a slot can be restricted to — keyed the same way brandTimezone()
   // labels fixed-offset brands ('IST'/'GST'); 'UK' covers Haldiram UK's
   // date-dependent GMT/BST offset under one stable key.
@@ -645,8 +643,7 @@
       const total = tiSum(perDay);
       const nps = tiNps(total);
       const prevDelta = Math.round(rng(hash((scope || '') + '|' + (entity || '') + '|' + (period || '') + '|' + slot.id + '|prev'))() * 16 - 8);
-      const name = slot.market ? `${slot.name} — ${marketLabel(slot.market, true)}` : slot.name;
-      return { id: slot.id, name, start: slot.start, end: slot.end, market: slot.market || null, hours: hrs, perDay, total,
+      return { id: slot.id, name: slot.name, start: slot.start, end: slot.end, market: slot.market || null, hours: hrs, perDay, total,
         volume: total.n, nps, lowSample: total.n < TI_MIN_SAMPLE,
         prevNps: Math.max(-100, Math.min(100, nps - prevDelta)), trend: prevDelta,
         detractorPct: total.n ? Math.round((total.d / total.n) * 100) : 0 };

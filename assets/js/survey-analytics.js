@@ -860,20 +860,18 @@
         for (let h = 0; h < 24; h++) html += `<option value="${h}" ${+sel === h ? 'selected' : ''}>${fmtHour(h)}</option>`;
         return html;
       }
-      // Display name for a market: its real IANA zone. Every slot belongs to
-      // exactly one market — there is no "all markets" catch-all.
+      // Display name for a market: its real IANA zone.
       function marketDisplay(key) { const m = TI.MARKETS.find(mk => mk.key === key); return m ? m.iana : key; }
       function openSlotModal() {
         const { m } = modal('⚙ Slot Configuration', 820);
-        m.appendChild(el('<div class="muted sa-sub" style="margin-bottom:12px">Define custom time slots (persisted). Editing re-maps all data and refreshes every view. Time Zone picks which market you\'re viewing and editing below — every slot belongs to exactly one market, so switching it never edits another market\'s slots.</div>'));
-        // One Time Zone selector for the whole modal — it decides which
-        // market's slot list is shown/edited below, it does NOT translate
-        // times between zones. Each market's slots are fully independent;
-        // there is no unrestricted/"all markets" bucket.
-        let viewMarket = TI.MARKETS[0].key;
+        m.appendChild(el('<div class="muted sa-sub" style="margin-bottom:12px">Define custom time slots (persisted). Editing re-maps all data and refreshes every view. There\'s one shared list of slots below — Time Zone tags which market\'s brands they currently belong to. Switching it re-tags every slot at once; it never hides, filters, or forks into separate lists.</div>'));
+        // One flat slot list, one Time Zone tag shared by all of them.
+        // Switching this selector bulk-reassigns every existing slot to the
+        // new market — it's not a filter and there's nothing to fork.
+        let viewMarket = (slots[0] && slots[0].market) || TI.MARKETS[0].key;
         const tzRow = el(`<div class="sa-tz-row"><div class="sa-tz-label">Time Zone</div></div>`);
         const tzSelectHolder = el('<div></div>');
-        const tzNote = el('<div class="muted sa-sub" style="margin:0">Shows this market\'s slot list only.</div>');
+        const tzNote = el('<div class="muted sa-sub" style="margin:0">Re-tags every slot below to this market.</div>');
         tzRow.appendChild(tzSelectHolder); tzRow.appendChild(tzNote);
         m.appendChild(tzRow);
         const status = el('<div class="sa-status-note" style="display:none"></div>');
@@ -891,26 +889,24 @@
           const options = TI.MARKETS.map(mk => mk.iana);
           tzSelectHolder.appendChild(U.selectEl(marketDisplay(viewMarket), options, marketDisplay(viewMarket), v => {
             viewMarket = TI.MARKETS.find(mk => mk.iana === v).key;
-            paintTzSelect(); redraw();
+            slots = slots.map(s => Object.assign({}, s, { market: viewMarket }));
+            TI.saveSlots(slots); paintTzSelect(); redraw(); refreshAll();
+            flashStatus(`Reassigned all ${slots.length} slot${slots.length === 1 ? '' : 's'} to ${marketDisplay(viewMarket)}.`);
           }));
         }
         let statusTimer = null;
         function flashStatus(text) { status.textContent = text; status.style.display = ''; clearTimeout(statusTimer); statusTimer = setTimeout(() => { status.style.display = 'none'; }, 2500); }
         const SLOT_COUNT_WARNING = 10;
         function updateCountWarning() {
-          if (slots.length > SLOT_COUNT_WARNING) { countWarn.textContent = `You have ${slots.length} slots across all markets — consider consolidating for readability.`; countWarn.style.display = ''; }
+          if (slots.length > SLOT_COUNT_WARNING) { countWarn.textContent = `You have ${slots.length} slots — consider consolidating for readability.`; countWarn.style.display = ''; }
           else countWarn.style.display = 'none';
         }
         function redraw() {
           updateCountWarning();
           $('.sa-slot-tz', add).textContent = marketDisplay(viewMarket);
-          // Every slot belongs to exactly one market, so this is a plain
-          // exact match — switching Time Zone only changes which market's
-          // own slots are shown; it never hides, edits, or deletes any slot.
-          const visible = slots.filter(s => s.market === viewMarket);
-          tl.innerHTML = ''; tl.appendChild(timeline(visible));
+          tl.innerHTML = ''; tl.appendChild(timeline(slots));
           list.innerHTML = '';
-          visible.forEach(s => {
+          slots.forEach(s => {
             const row = el(`<div class="sa-slotrow"><input class="sa-search f-n" value="${s.name}" style="min-width:110px"/>
               <select class="sa-search f-s">${hourOptions(s.start)}</select><span class="muted">–</span><select class="sa-search f-e">${hourOptions(s.end)}</select>
               <span class="muted sa-slot-tz">${marketDisplay(s.market)}</span>
