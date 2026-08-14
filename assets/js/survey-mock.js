@@ -394,6 +394,18 @@
     if (!period || period === 'This Month' || period === 'Last 28 Days') return 0;
     return Math.round(rng(hash('ti-period|' + period))() * 14 - 7);
   }
+  // Promoter/detractor rates that reconstruct a given NPS (pr - dr = nps/100)
+  // while actually reserving `passiveFrac` of responses as passive (pr + dr =
+  // 1 - passiveFrac). Solving those two linear equations for pr/dr, then
+  // clamping for extreme NPS values where there's no room left for either.
+  function tiSplitFromNps(nps, passiveFrac) {
+    const pf = Math.max(0, Math.min(0.4, passiveFrac || 0));
+    let pr = (nps / 100 + 1 - pf) / 2;
+    let dr = (1 - pf - nps / 100) / 2;
+    pr = Math.max(0, Math.min(1, pr));
+    dr = Math.max(0, Math.min(1 - pr, dr));
+    return { pr, dr };
+  }
   // Generic "resize this aggregate to a different volume/NPS" helper — reused
   // for date-range filtering and for splitting a brand's matrix across the
   // countries/entities it operates in (same math, different callers).
@@ -403,8 +415,7 @@
     if (!npsDelta) { const f = agg.n ? n / agg.n : 0; return { n, p: Math.round(agg.p * f), pa: Math.round(agg.pa * f), d: Math.round(agg.d * f) }; }
     const baseNps = agg.n ? Math.round((agg.p / agg.n) * 100) - Math.round((agg.d / agg.n) * 100) : 0;
     const nps = Math.max(-100, Math.min(100, baseNps + npsDelta));
-    const pr = Math.max(0.02, Math.min(0.98, (nps + 100) / 200));
-    const dr = Math.max(0, Math.min(1 - pr, pr - nps / 100));
+    const { pr, dr } = tiSplitFromNps(nps, 0.14);
     const p = Math.round(n * pr), d = Math.round(n * dr), pa = Math.max(0, n - p - d);
     return { n, p, pa, d };
   }
@@ -458,8 +469,7 @@
       for (let h = 0; h < 24; h++) {
         const cellN = n[day][h];
         const nps = Math.max(-100, Math.min(100, Math.round(b.nps + npsRaw[day][h] - meanBias)));
-        const pr = Math.max(0.02, Math.min(0.98, (nps + 100) / 200));
-        const dr = Math.max(0, Math.min(1 - pr, pr - nps / 100));
+        const { pr, dr } = tiSplitFromNps(nps, 0.10 + rr() * 0.10);
         const p = Math.round(cellN * pr), d = Math.round(cellN * dr), pa = Math.max(0, cellN - p - d);
         m[day][h] = { n: cellN, p, pa, d };
       }
@@ -492,8 +502,7 @@
       for (let h = 0; h < 24; h++) {
         const cellN = volumeByCell[day][h];
         const nps = Math.max(-100, Math.min(100, Math.round(targetNps + npsRaw[day][h] - meanBias)));
-        const pr = Math.max(0.02, Math.min(0.98, (nps + 100) / 200));
-        const dr = Math.max(0, Math.min(1 - pr, pr - nps / 100));
+        const { pr, dr } = tiSplitFromNps(nps, 0.10 + rr() * 0.10);
         const p = Math.round(cellN * pr), d = Math.round(cellN * dr), pa = Math.max(0, cellN - p - d);
         out[day][h] = { n: cellN, p, pa, d };
       }
@@ -646,6 +655,8 @@
       return { id: slot.id, name: slot.name, start: slot.start, end: slot.end, market: slot.market || null, hours: hrs, perDay, total,
         volume: total.n, nps, lowSample: total.n < TI_MIN_SAMPLE,
         prevNps: Math.max(-100, Math.min(100, nps - prevDelta)), trend: prevDelta,
+        promoterPct: total.n ? Math.round((total.p / total.n) * 100) : 0,
+        passivePct: total.n ? Math.round((total.pa / total.n) * 100) : 0,
         detractorPct: total.n ? Math.round((total.d / total.n) * 100) : 0 };
     });
   }
@@ -795,6 +806,8 @@
       const prevDelta = Math.round(rng(hash('ot|' + entity.join(',') + '|' + period + '|' + ot + '|prev'))() * 16 - 8);
       return { id: ot, name: ot, total, volume: total.n, nps, lowSample: total.n < TI_MIN_SAMPLE,
         prevNps: Math.max(-100, Math.min(100, nps - prevDelta)), trend: prevDelta,
+        promoterPct: total.n ? Math.round((total.p / total.n) * 100) : 0,
+        passivePct: total.n ? Math.round((total.pa / total.n) * 100) : 0,
         detractorPct: total.n ? Math.round((total.d / total.n) * 100) : 0 };
     });
   }

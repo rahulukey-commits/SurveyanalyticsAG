@@ -739,14 +739,15 @@
         } else {
           const rows = metrics.slice().sort((a, b) => (a[vs.sortKey] - b[vs.sortKey]) * vs.sortDir);
           const th = (k, l) => `<th class="ta-r sa-sortable" data-k="${k}">${l}${vs.sortKey === k ? (vs.sortDir < 0 ? ' ▾' : ' ▴') : ''}</th>`;
-          const t = el(`<table class="table sa-table"><thead><tr><th>Time Slot</th><th>Window</th>${th('nps', 'NPS')}${th('volume', 'Responses')}<th class="ta-r">vs prev</th><th class="ta-r">Detractor %</th></tr></thead><tbody></tbody></table>`);
+          const t = el(`<table class="table sa-table"><thead><tr><th>Time Slot</th><th>Window</th>${th('nps', 'NPS')}${th('volume', 'Responses')}<th class="ta-r">Promoters %</th><th class="ta-r">Passives %</th><th class="ta-r">Detractor %</th><th class="ta-r">vs prev</th></tr></thead><tbody></tbody></table>`);
           const tb = $('tbody', t);
           rows.forEach(m => {
             const cell = m.lowSample ? '<span class="sa-lowpill">Low sample</span>' : `<span style="color:${npsCol(m.nps)};font-weight:600">${m.nps}</span>`;
             const isSel = slotDrill.isSelected(m.id);
             const tr = el(`<tr class="sa-rowlink" tabindex="0" ${isSel ? 'style="background:var(--hover)"' : ''}><td><b>${m.name}</b></td><td class="muted">${fmtHour(m.start)}–${fmtHour(m.end)}</td>
               <td class="ta-r">${cell}</td><td class="ta-r">${fmt(m.volume)}</td>
-              <td class="ta-r">${m.lowSample ? dashTip() : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? dashTip() : m.detractorPct + '%'}</td></tr>`);
+              <td class="ta-r">${m.lowSample ? dashTip() : m.promoterPct + '%'}</td><td class="ta-r">${m.lowSample ? dashTip() : m.passivePct + '%'}</td>
+              <td class="ta-r">${m.lowSample ? dashTip() : m.detractorPct + '%'}</td><td class="ta-r">${m.lowSample ? dashTip() : arrow(m.trend)}</td></tr>`);
             const toggle = () => { slotDrill.toggle(m.id); drawSlots(metrics); };
             tr.addEventListener('click', toggle);
             tr.addEventListener('keydown', e => { if (e.key === 'Enter') toggle(); });
@@ -771,14 +772,15 @@
           const sel = metrics.find(m => otDrill.isSelected(m.id));
           Charts.npsVolume(b, metrics, { selectedId: sel ? sel.id : null, onClick: m => { otDrill.toggle(m.id); drawOT(); } });
         } else {
-          const t = el(`<table class="table sa-table"><thead><tr><th>Order Type</th><th class="ta-r">NPS</th><th class="ta-r">Responses</th><th class="ta-r">vs prev</th><th class="ta-r">Detractor %</th></tr></thead><tbody></tbody></table>`);
+          const t = el(`<table class="table sa-table"><thead><tr><th>Order Type</th><th class="ta-r">NPS</th><th class="ta-r">Responses</th><th class="ta-r">Promoters %</th><th class="ta-r">Passives %</th><th class="ta-r">Detractor %</th><th class="ta-r">vs prev</th></tr></thead><tbody></tbody></table>`);
           const tb = $('tbody', t);
           metrics.forEach(m => {
             const cell = m.lowSample ? '<span class="sa-lowpill">Low sample</span>' : `<span style="color:${npsCol(m.nps)};font-weight:600">${m.nps}</span>`;
             const isSel = otDrill.isSelected(m.id);
             const tr = el(`<tr class="sa-rowlink" tabindex="0" ${isSel ? 'style="background:var(--hover)"' : ''}><td><b>${m.name}</b></td>
               <td class="ta-r">${cell}</td><td class="ta-r">${fmt(m.volume)}</td>
-              <td class="ta-r">${m.lowSample ? dashTip() : arrow(m.trend)}</td><td class="ta-r">${m.lowSample ? dashTip() : m.detractorPct + '%'}</td></tr>`);
+              <td class="ta-r">${m.lowSample ? dashTip() : m.promoterPct + '%'}</td><td class="ta-r">${m.lowSample ? dashTip() : m.passivePct + '%'}</td>
+              <td class="ta-r">${m.lowSample ? dashTip() : m.detractorPct + '%'}</td><td class="ta-r">${m.lowSample ? dashTip() : arrow(m.trend)}</td></tr>`);
             const toggle = () => { otDrill.toggle(m.id); drawOT(); };
             tr.addEventListener('click', toggle);
             tr.addEventListener('keydown', e => { if (e.key === 'Enter') toggle(); });
