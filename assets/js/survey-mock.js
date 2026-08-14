@@ -324,17 +324,21 @@
   // Slot start/end are whole hours (0-23) — the underlying per-brand matrix
   // (BRAND_HOURDAY) is itself indexed by whole hour, so minute-level slot
   // boundaries were never actually honored; this makes the UI match reality.
-  // Every slot belongs to exactly one of TI_MARKETS' keys — there is no
-  // "applies to every market" bucket. The shipped defaults below live under
-  // IST; GST and UK start with no slots until an admin adds their own.
-  const TI_DEFAULT_SLOTS = [
-    { id: 's1', name: 'Early Morning', start: 6,  end: 9,  market: 'IST' },
-    { id: 's2', name: 'Late Morning',  start: 9,  end: 12, market: 'IST' },
-    { id: 's3', name: 'Lunch',         start: 12, end: 15, market: 'IST' },
-    { id: 's4', name: 'Afternoon',     start: 15, end: 17, market: 'IST' },
-    { id: 's5', name: 'Evening',       start: 17, end: 21, market: 'IST' },
-    { id: 's6', name: 'Night',         start: 21, end: 6,  market: 'IST' }
+  // Every slot belongs to exactly one market — there is no "applies to every
+  // market" bucket. Each of IST/GST/UK ships with its own independent copy
+  // of the same 6 slots below, so switching Time Zone never looks like
+  // slots went missing; each market's copy can then be edited separately.
+  const TI_DEFAULT_SLOT_TEMPLATE = [
+    { name: 'Early Morning', start: 6,  end: 9 },
+    { name: 'Late Morning',  start: 9,  end: 12 },
+    { name: 'Lunch',         start: 12, end: 15 },
+    { name: 'Afternoon',     start: 15, end: 17 },
+    { name: 'Evening',       start: 17, end: 21 },
+    { name: 'Night',         start: 21, end: 6 }
   ];
+  const TI_DEFAULT_SLOTS = ['IST', 'GST', 'UK'].flatMap(mk =>
+    TI_DEFAULT_SLOT_TEMPLATE.map((t, i) => Object.assign({ id: `s-${mk.toLowerCase()}-${i + 1}`, market: mk }, t))
+  );
   // Markets a slot can be restricted to — keyed the same way brandTimezone()
   // labels fixed-offset brands ('IST'/'GST'); 'UK' covers Haldiram UK's
   // date-dependent GMT/BST offset under one stable key.
