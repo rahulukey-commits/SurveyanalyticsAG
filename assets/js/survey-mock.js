@@ -106,6 +106,16 @@
   function citiesFor(state) { return [state + ' Central', state + ' Suburbs']; }
   function storesFor(city) { return [city + ' Mall Store', city + ' Outlet Store', city + ' Flagship Store']; }
 
+  // ---- org-first hierarchy for Progressive Drilldown: Country -> City -> Store -> Brand
+  // Separate from drilldown()/levelName()/canDrill() above (which stay exactly as
+  // they are — Time Intelligence's own drill depends on that exact shape). STATES
+  // doubles as the city list here since it already holds real GCC city names.
+  // Store names reuse the existing storesFor() generator (plain "{city} Mall
+  // Store" / "Outlet Store" / "Flagship Store" labels) rather than real mall
+  // names, so no per-city name directory needs maintaining.
+  const COUNTRY_NAMES = { AE: 'United Arab Emirates', SA: 'Saudi Arabia', KW: 'Kuwait', QA: 'Qatar', BH: 'Bahrain', OM: 'Oman' };
+  const CITIES = STATES;
+
   const BAND_COLORS = [
     { min: 70,   label: 'Excellent (70+)',      short: 'Excellent',     range: '70+',      color: '#22c55e' },
     { min: 50,   label: 'Good (50–69)',         short: 'Good',          range: '50–69',    color: '#2563eb' },
@@ -125,7 +135,7 @@
     const brand = BUS.find(b => b.name === path[0]) || BUS[0];
     const parentVal = brand[mk], parentResp = brand.responses;
     let keys = [];
-    if (path.length === 1) keys = COUNTRIES.slice(0, 2 + hmod(brand.name, 3));
+    if (path.length === 1) keys = COUNTRIES.slice(0, 2 + hmod(brand.name, 5));
     else if (path.length === 2) keys = ZONES;
     else if (path.length === 3) keys = STATES[path[1]] || ['Region 1'];
     else if (path.length === 4) keys = citiesFor(path[3]);
@@ -555,6 +565,73 @@
     COUNTRY_HOURDAY[country] = m;
   });
 
+  // ---- org-first drilldown engine: Country -> City -> Store -> Brand -------
+  // Rolls up from the same brand/country shares as COUNTRY_CONTRIB (so a
+  // country's numbers agree with the rest of the app) rather than inventing
+  // a second, disconnected dataset; each deeper level is a proportional,
+  // seeded split of its own parent's value/responses — the same conservation
+  // pattern drilldown() already uses (all children sum back to the parent).
+  function orgAggregate(contribs, mk) {
+    let responses = 0, weighted = 0;
+    contribs.forEach(c => {
+      const b = BUS.find(x => x.name === c.brand);
+      if (!b) return;
+      const resp = Math.max(1, Math.round(b.responses * c.shareFrac));
+      const delta = mk === 'nps' ? c.npsDelta : Math.round(c.npsDelta * (mk === 'rating' ? 0.02 : 0.6));
+      const raw = b[mk] + delta;
+      const val = mk === 'rating' ? Math.max(1, Math.min(5, raw)) : Math.max(mk === 'nps' ? -100 : 0, Math.min(100, Math.round(raw)));
+      responses += resp; weighted += val * resp;
+    });
+    const value = responses ? (mk === 'rating' ? +(weighted / responses).toFixed(1) : Math.round(weighted / responses)) : 0;
+    const promoter = Math.max(0, Math.min(100, Math.round((Number(value) + 100) / 2)));
+    const detractor = Math.max(0, Math.min(100 - promoter, Math.round(promoter - Number(value))));
+    return { value, responses, promoter, passive: Math.max(0, 100 - promoter - detractor), detractor };
+  }
+  function orgSplitChildren(seed, parentVal, parentResp, keys, mk) {
+    const rr = rng(hash(seed));
+    let assigned = 0;
+    return keys.map((k, i) => {
+      const dev = i < keys.length - 1 ? Math.round(rr() * 14 - 7) : 0;
+      const value = mk === 'rating' ? +Math.max(1, Math.min(5, parentVal + dev / 20)).toFixed(1)
+        : Math.max(mk === 'nps' ? -100 : 0, Math.min(100, parentVal + dev));
+      const resp = i === keys.length - 1 ? Math.max(1, parentResp - assigned) : Math.max(1, Math.round(parentResp * (0.2 + rr() * 0.35)));
+      assigned += resp;
+      const promoter = Math.max(0, Math.min(100, Math.round((Number(value) + 100) / 2)));
+      const detractor = Math.max(0, Math.min(100 - promoter, Math.round(promoter - Number(value))));
+      return { name: k, value, responses: resp, promoter, passive: Math.max(0, 100 - promoter - detractor), detractor, trend: Math.round(rr() * 20 - 10) };
+    });
+  }
+  // Deterministic, seeded 2-5 of BU_NAMES for a given store — which brands
+  // actually have a concession there.
+  function storeBrands(storeName) {
+    const rr = rng(hash('storebrands|' + storeName));
+    const shuffled = BU_NAMES.map(n => [rr(), n]).sort((a, b) => a[0] - b[0]).map(x => x[1]);
+    return shuffled.slice(0, Math.min(BU_NAMES.length, 2 + hmod(storeName, Math.min(4, BU_NAMES.length - 1))));
+  }
+  function orgDrilldown(metric, path) {
+    const mk = metricKey[metric] || 'nps';
+    if (!path || !path.length) {
+      return COUNTRY_LIST.map(code => {
+        const agg = orgAggregate(COUNTRY_CONTRIB[code] || [], mk);
+        return Object.assign({ name: COUNTRY_NAMES[code] || code }, agg, { trend: Math.round(rng(hash('org|country|' + code))() * 20 - 10) });
+      }).sort((a, b) => b.responses - a.responses);
+    }
+    const countryCode = Object.keys(COUNTRY_NAMES).find(c => COUNTRY_NAMES[c] === path[0]) || path[0];
+    const countryAgg = orgAggregate(COUNTRY_CONTRIB[countryCode] || [], mk);
+    const cities = CITIES[countryCode] || [];
+    if (path.length === 1) return orgSplitChildren('org|city|' + path.join('|'), countryAgg.value, countryAgg.responses, cities, mk);
+    const cityAgg = orgSplitChildren('org|city|' + path[0], countryAgg.value, countryAgg.responses, cities, mk).find(c => c.name === path[1]);
+    if (!cityAgg) return [];
+    const stores = storesFor(path[1]);
+    if (path.length === 2) return orgSplitChildren('org|store|' + path.join('|'), cityAgg.value, cityAgg.responses, stores, mk);
+    const storeAgg = orgSplitChildren('org|store|' + path[0] + '|' + path[1], cityAgg.value, cityAgg.responses, stores, mk).find(m => m.name === path[2]);
+    if (!storeAgg) return [];
+    if (path.length === 3) return orgSplitChildren('org|brand|' + path.join('|'), storeAgg.value, storeAgg.responses, storeBrands(path[2]), mk);
+    return [];
+  }
+  function orgLevelName(depth) { return ['Country', 'City', 'Store', 'Brand'][depth] || 'Brand'; }
+  function orgCanDrill(depth) { return depth < 3; }
+
   // Both Brand and Country scope's entity are arrays — multi-select.
   // orderTypes optionally restricts to one or more TI_ORDER_TYPES; omitted
   // (or all of them) is unfiltered — byte-identical to before this existed.
@@ -866,6 +943,7 @@
 
   global.SurveyApi = {
     BAND_COLORS, colorFor, drilldown, levelName, canDrill, aggregate,
+    orgDrilldown, orgLevelName, orgCanDrill,
     BU_COUNT: BU_NAMES.length,
     sentimentExecutivePulse, sentimentVoiceOfCustomer, improvements, metricsComparison, channelAnalysis,
     brandNames: BU_NAMES.slice(),

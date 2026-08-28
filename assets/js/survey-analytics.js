@@ -111,9 +111,9 @@
         holder.appendChild(c1);
         Charts.surveyGauge($('.sa-gauge', gcol), agg.value, agg.min, agg.max);
 
-        // ---- Business Units + progressive drilldown levels
+        // ---- Country-first progressive drilldown levels
         const c2 = el('<section class="sa-card"></section>');
-        c2.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any brand to drill down to countries, zones, states, cities and stores.</div>`));
+        c2.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any country to drill down to cities, stores and brands.</div>`));
         const levels = el('<div></div>');
         c2.appendChild(levels);
         holder.appendChild(c2);
@@ -135,14 +135,14 @@
 
     // one drilldown level (bar with Load More/Show All  ⇄  table with pagination)
     function levelBlock(metric, path, depth, selected, onPick) {
-      const all = API.drilldown(metric, path);
+      const all = API.orgDrilldown(metric, path);
       const wrap = el('<div class="sa-level"></div>');
       const vs = { view: 'bar', shown: depth === 0 ? 5 : all.length, page: 0, per: 10, search: '', dir: -1 };
       const totalResp = all.reduce((a, r) => a + r.responses, 0);
 
       const title = depth === 0
-        ? `<b>Business Units</b>`
-        : `<span class="muted">${['Business Units'].concat(path.slice(0, -1)).join(' › ')} › </span><b>${path[path.length - 1]}</b> <span class="muted">›</span> <b>${API.levelName(depth)}</b>`;
+        ? `<b>Countries</b>`
+        : `<span class="muted">${['Countries'].concat(path.slice(0, -1)).join(' › ')} › </span><b>${path[path.length - 1]}</b> <span class="muted">›</span> <b>${API.orgLevelName(depth)}</b>`;
       const agg0 = API.aggregate(metric);
       const respLabel = depth === 0 ? agg0.responses : fmt(totalResp);
       const head = el(`<div class="sa-level-head"><div class="sa-level-title">${title}
@@ -181,7 +181,7 @@
           canvas.appendChild(box);
           Charts.divergingBars(box, show, { colorFor: API.colorFor, metricLabel: metric,
             tag: metric === 'RATING' ? '' : metric, faded: selected ? [selected] : [],
-            onClick: r => { if (API.canDrill(depth)) onPick(r.name); } });
+            onClick: r => { if (API.orgCanDrill(depth)) onPick(r.name); } });
           if (rows.length > vs.shown) {
             const remaining = rows.length - vs.shown;
             const more = el(`<div class="sa-loadmore">
@@ -208,8 +208,8 @@
               <td class="ta-r" style="color:#ef4444">${r.detractor}%</td>
               <td class="ta-r">${fmt(r.responses)}</td>
               <td class="ta-r" style="color:${r.trend > 0 ? '#22c55e' : r.trend < 0 ? '#ef4444' : '#8b91a0'}">${r.trend > 0 ? '+' : ''}${r.trend}% ${r.trend > 0 ? '↗' : r.trend < 0 ? '↘' : ''}</td></tr>`);
-            tr.addEventListener('click', () => { if (API.canDrill(depth)) onPick(r.name); });
-            tr.addEventListener('keydown', e => { if (e.key === 'Enter' && API.canDrill(depth)) onPick(r.name); });
+            tr.addEventListener('click', () => { if (API.orgCanDrill(depth)) onPick(r.name); });
+            tr.addEventListener('keydown', e => { if (e.key === 'Enter' && API.orgCanDrill(depth)) onPick(r.name); });
             tb.appendChild(tr);
           });
           canvas.appendChild(table);
