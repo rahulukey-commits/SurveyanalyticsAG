@@ -1,8 +1,8 @@
 /* ============================================================================
  * Survey Analytics — client-side aggregation ("API")
  * Modelled on the live Karnival Survey Analytics (dashboard.karnival.in),
- * scoped to the 5 Haldiram legal entities. Swappable for a real backend: the
- * module only ever calls SurveyApi.*
+ * scoped to 6 Apparel Group brands across the GCC. Swappable for a real
+ * backend: the module only ever calls SurveyApi.*
  *
  * Score bands (drive the Business Units bar colors + legend):
  *   Excellent 70+ · Good 50-69 · Average 30-49 · Below Average 0-29 · Poor <0
@@ -16,7 +16,7 @@
   function hmod(s, n) { return ((hash(s) % n) + n) % n; }
 
   // ---- Headline (matches the live default: NPS 63, 3.1M sent, 18.0K resp) --
-  // Totals bumped from the original 2.8M/16.5K to fold in Haldiram UK's
+  // Totals bumped from the original 2.8M/16.5K to fold in a 6th brand's
   // volume, keeping "responses sum to the headline total" true for 6 brands.
   const HEADLINE = {
     NPS:    { value: 63,  totalSurveys: '3.1M', responses: '18.0K', respN: 18000 },
@@ -41,59 +41,44 @@
              { key: '1 ★', pct: 4,  users: '0.7K', color: '#ef4444' }]
   };
 
-  // ---- Business units: the 6 Haldiram legal entities ------------------------
+  // ---- Business units: 6 Apparel Group brands across the GCC ----------------
   const BU_NAMES = [
-    'HALDIRAM MARKETING PVT. LTD. - HEFPL',
-    'HALDIRAM MARKETING PVT. LTD.- HMCPL',
-    'Haldiram Marketing Private Limited- HMPL',
-    'Haldiram UAE',
-    'HALDIRAM MARKETING PVT. LTD. - HPPL',
-    'Haldiram UK'
+    'Tommy Hilfiger',
+    'Nine West',
+    'Aldo',
+    'R&B Kids',
+    'Steve Madden',
+    'Tim Hortons'
   ];
   // Explicit per-brand signature so the rows span every score band (spread
   // across Excellent/Good/Average/Poor) and responses sum to the headline
   // total (18.0K), so the drilldown stays internally consistent.
   const BU_SIGNATURE = {
-    'HALDIRAM MARKETING PVT. LTD. - HEFPL':    { nps: 72, responses: 5300 },
-    'HALDIRAM MARKETING PVT. LTD.- HMCPL':     { nps: 55, responses: 3100 },
-    'Haldiram Marketing Private Limited- HMPL': { nps: 38, responses: 2600 },
-    'Haldiram UAE':                             { nps: 68, responses: 4200 },
-    'HALDIRAM MARKETING PVT. LTD. - HPPL':     { nps: 5,  responses: 1300 },
-    'Haldiram UK':                              { nps: 61, responses: 1500 }
+    'Tommy Hilfiger': { nps: 72, responses: 5300 },
+    'Nine West':      { nps: 55, responses: 3100 },
+    'Aldo':           { nps: 38, responses: 2600 },
+    'R&B Kids':       { nps: 68, responses: 4200 },
+    'Steve Madden':   { nps: 5,  responses: 1300 },
+    'Tim Hortons':    { nps: 61, responses: 1500 }
   };
   // ---- Per-brand local timezone ---------------------------------------------
   // Every response is tied to an invoice timestamp stored in UTC; Time
   // Intelligence's hour-of-day / day-of-week buckets ("Lunch", "Weekend", ...)
   // are meaningless unless read in the RESPONDENT'S local time, not UTC or any
-  // one shared clock. India and the UAE run a single fixed offset year-round;
-  // the UK observes British Summer Time (BST, UTC+1) roughly late-March to
-  // late-October and GMT (UTC+0) the rest of the year, so its offset is
-  // computed from the date rather than hardcoded — see bstOffsetMinutes().
+  // one shared clock. The GCC spans exactly two fixed offsets year-round (no
+  // country in the GCC observes DST): GST (UTC+4, UAE & Oman) and AST
+  // (UTC+3, Saudi Arabia, Qatar, Kuwait & Bahrain).
   const BU_TIMEZONE = {
-    'HALDIRAM MARKETING PVT. LTD. - HEFPL':     { label: 'IST', offsetMinutes: 330 },
-    'HALDIRAM MARKETING PVT. LTD.- HMCPL':      { label: 'IST', offsetMinutes: 330 },
-    'Haldiram Marketing Private Limited- HMPL': { label: 'IST', offsetMinutes: 330 },
-    'HALDIRAM MARKETING PVT. LTD. - HPPL':      { label: 'IST', offsetMinutes: 330 },
-    'Haldiram UAE':                             { label: 'GST', offsetMinutes: 240 },
-    'Haldiram UK':                              { label: null, offsetMinutes: null } // resolved per-date, see below
+    'Tommy Hilfiger': { label: 'GST', offsetMinutes: 240 },
+    'Nine West':      { label: 'GST', offsetMinutes: 240 },
+    'Aldo':           { label: 'AST', offsetMinutes: 180 },
+    'R&B Kids':       { label: 'AST', offsetMinutes: 180 },
+    'Steve Madden':   { label: 'AST', offsetMinutes: 180 },
+    'Tim Hortons':    { label: 'GST', offsetMinutes: 240 }
   };
-  // Last Sunday of a given (year, 0-based month), at 00:00 UTC.
-  function lastSundayOfMonth(year, monthIdx) {
-    const d = new Date(Date.UTC(year, monthIdx + 1, 0)); // last calendar day of the month
-    d.setUTCDate(d.getUTCDate() - d.getUTCDay()); // step back to that month's last Sunday
-    return d;
-  }
-  // British Summer Time runs from the last Sunday in March to the last Sunday
-  // in October (clocks go forward/back at 01:00 UTC); GMT otherwise.
-  function isBST(date) {
-    const y = date.getUTCFullYear();
-    return date >= lastSundayOfMonth(y, 2) && date < lastSundayOfMonth(y, 9);
-  }
-  function ukTimezone(date) { return isBST(date) ? { label: 'BST', offsetMinutes: 60 } : { label: 'GMT', offsetMinutes: 0 }; }
-  // Timezone for a brand as of `date` (defaults to TI_TODAY, defined below).
-  function brandTimezone(brandName, date) {
-    if (brandName === 'Haldiram UK') return ukTimezone(date || TI_TODAY);
-    return BU_TIMEZONE[brandName] || { label: 'IST', offsetMinutes: 330 };
+  // Timezone for a brand (fixed offset — no GCC country observes DST).
+  function brandTimezone(brandName) {
+    return BU_TIMEZONE[brandName] || { label: 'GST', offsetMinutes: 240 };
   }
   function tzLabel(tz) { return `${tz.label} (UTC${tz.offsetMinutes >= 0 ? '+' : '-'}${Math.floor(Math.abs(tz.offsetMinutes) / 60)}${Math.abs(tz.offsetMinutes) % 60 ? ':' + (Math.abs(tz.offsetMinutes) % 60) : ''})`; }
 
@@ -245,17 +230,17 @@
     // row weight roughly follows each brand's NPS (lower NPS → more "things to
     // improve" mentions, fewer "appreciation" mentions, and vice-versa)
     const rows = kind === 'appreciation' ? [
-      { name: 'HALDIRAM MARKETING PVT. LTD. - HEFPL',     values: [62, 48, 24, 9, 15, 12] },
-      { name: 'Haldiram UAE',                              values: [51, 40, 19, 8, 12, 9] },
-      { name: 'HALDIRAM MARKETING PVT. LTD.- HMCPL',       values: [22, 16, 7, 3, 5, 3] },
-      { name: 'Haldiram Marketing Private Limited- HMPL',  values: [9, 6, 3, 1, 2, 1] },
-      { name: 'HALDIRAM MARKETING PVT. LTD. - HPPL',       values: [3, 2, 1, 0, 1, 0] }
+      { name: 'Tommy Hilfiger', values: [62, 48, 24, 9, 15, 12] },
+      { name: 'R&B Kids',       values: [51, 40, 19, 8, 12, 9] },
+      { name: 'Nine West',      values: [22, 16, 7, 3, 5, 3] },
+      { name: 'Aldo',           values: [9, 6, 3, 1, 2, 1] },
+      { name: 'Steve Madden',   values: [3, 2, 1, 0, 1, 0] }
     ] : [
-      { name: 'HALDIRAM MARKETING PVT. LTD. - HPPL',       values: [155, 129, 56, 5, 71, 46] },
-      { name: 'Haldiram Marketing Private Limited- HMPL',  values: [40, 34, 15, 4, 18, 11] },
-      { name: 'HALDIRAM MARKETING PVT. LTD.- HMCPL',       values: [18, 16, 7, 2, 7, 7] },
-      { name: 'Haldiram UAE',                              values: [11, 9, 5, 2, 2, 1] },
-      { name: 'HALDIRAM MARKETING PVT. LTD. - HEFPL',      values: [7, 5, 2, 1, 2, 0] }
+      { name: 'Steve Madden',   values: [155, 129, 56, 5, 71, 46] },
+      { name: 'Aldo',           values: [40, 34, 15, 4, 18, 11] },
+      { name: 'Nine West',      values: [18, 16, 7, 2, 7, 7] },
+      { name: 'R&B Kids',       values: [11, 9, 5, 2, 2, 1] },
+      { name: 'Tommy Hilfiger', values: [7, 5, 2, 1, 2, 0] }
     ];
     rows.forEach(r => r.total = r.values.reduce((a, b) => a + b, 0));
     return { categories: cats, rows, totalSurveys: '2.8M', responses: rows.reduce((a, r) => a + r.total, 0) };
@@ -265,7 +250,7 @@
   function metricsComparison(metric, brandNames) {
     metric = metric || 'NPS';
     const mk = metricKey[metric] || 'nps';
-    brandNames = (brandNames && brandNames.length) ? brandNames : ['HALDIRAM MARKETING PVT. LTD. - HEFPL', 'Haldiram UAE'];
+    brandNames = (brandNames && brandNames.length) ? brandNames : ['Tommy Hilfiger', 'R&B Kids'];
     const dates = []; for (let d = 1; d <= 28; d++) dates.push('2026-07-' + String(d).padStart(2, '0'));
     const max = metric === 'RATING' ? 5 : 100, min = metric === 'NPS' ? -100 : 0;
     const series = brandNames.map(name => {
@@ -330,25 +315,22 @@
   // Configuration re-tags every slot at once, it never filters or forks
   // into separate lists.
   const TI_DEFAULT_SLOTS = [
-    { id: 's1', name: 'Early Morning', start: 6,  end: 9,  market: 'IST' },
-    { id: 's2', name: 'Late Morning',  start: 9,  end: 12, market: 'IST' },
-    { id: 's3', name: 'Lunch',         start: 12, end: 15, market: 'IST' },
-    { id: 's4', name: 'Afternoon',     start: 15, end: 17, market: 'IST' },
-    { id: 's5', name: 'Evening',       start: 17, end: 21, market: 'IST' },
-    { id: 's6', name: 'Night',         start: 21, end: 6,  market: 'IST' }
+    { id: 's1', name: 'Early Morning', start: 6,  end: 9,  market: 'GST' },
+    { id: 's2', name: 'Late Morning',  start: 9,  end: 12, market: 'GST' },
+    { id: 's3', name: 'Lunch',         start: 12, end: 15, market: 'GST' },
+    { id: 's4', name: 'Afternoon',     start: 15, end: 17, market: 'GST' },
+    { id: 's5', name: 'Evening',       start: 17, end: 21, market: 'GST' },
+    { id: 's6', name: 'Night',         start: 21, end: 6,  market: 'GST' }
   ];
-  // Markets a slot can be restricted to — keyed the same way brandTimezone()
-  // labels fixed-offset brands ('IST'/'GST'); 'UK' covers Haldiram UK's
-  // date-dependent GMT/BST offset under one stable key.
+  // Markets a slot can be restricted to — the GCC's two fixed offsets,
+  // keyed the same way brandTimezone() labels each brand.
   const TI_MARKETS = [
-    { key: 'IST', short: 'IST', label: 'India (IST, UTC+5:30)', iana: 'Asia/Kolkata' },
-    { key: 'GST', short: 'GST', label: 'UAE (GST, UTC+4:00)', iana: 'Asia/Dubai' },
-    { key: 'UK',  short: 'UK',  label: 'UK (GMT/BST)', iana: 'Europe/London' }
+    { key: 'GST', short: 'GST', label: 'UAE & Oman (GST, UTC+4:00)', iana: 'Asia/Dubai' },
+    { key: 'AST', short: 'AST', label: 'Saudi, Qatar, Kuwait & Bahrain (AST, UTC+3:00)', iana: 'Asia/Riyadh' }
   ];
   function marketKeyForBrand(brandName) {
-    if (brandName === 'Haldiram UK') return 'UK';
     const tz = BU_TIMEZONE[brandName];
-    return tz ? tz.label : 'IST';
+    return tz ? tz.label : 'GST';
   }
   function marketLabel(key, short) {
     const m = TI_MARKETS.find(x => x.key === key);
@@ -611,9 +593,9 @@
   // OWN local time before being combined (see BU_TIMEZONE above) — this just
   // reports which timezone(s) are in play so the UI can tell the user when
   // "Lunch" or "Weekend" is blending more than one local clock.
-  function tiTimezoneInfo(scope, entity, date) {
+  function tiTimezoneInfo(scope, entity) {
     const brands = tiBrandsInScope(scope, entity);
-    const zones = brands.map(b => brandTimezone(b, date));
+    const zones = brands.map(brandTimezone);
     const labels = Array.from(new Set(zones.map(tzLabel)));
     return { brands, labels, mixed: labels.length > 1 };
   }

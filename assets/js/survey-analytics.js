@@ -1,6 +1,6 @@
 /* ============================================================================
  * Survey Analytics — full replication of the live Karnival module
- * (dashboard.karnival.in/#/survey-analytics), scoped to the 5 Haldiram brands.
+ * (dashboard.karnival.in/#/survey-analytics), scoped to 6 Apparel Group brands.
  * Charts: ECharts (via Charts.*). Data: SurveyApi.* (swappable for a backend).
  *
  * Progressive Drilldown  → NPS · CSAT · CES · RATING
@@ -361,7 +361,7 @@
     // =========================================================================
     function renderCompare(host) {
       const METRICS = { 'NPS (Net Promoter Score)': 'NPS', 'CSAT (Customer Satisfaction)': 'CSAT', 'CES (Customer Effort Score)': 'CES', 'RATING (Overall Rating)': 'RATING' };
-      const cmp = { metricLabel: 'NPS (Net Promoter Score)', brands: ['HALDIRAM MARKETING PVT. LTD. - HEFPL', 'Haldiram UAE'] };
+      const cmp = { metricLabel: 'NPS (Net Promoter Score)', brands: ['Tommy Hilfiger', 'R&B Kids'] };
       const holder = el('<div></div>'); host.appendChild(holder);
       draw();
       function draw() {
@@ -999,9 +999,9 @@
         if (+s.start === +s.end) return 'End must differ from start.';
         const mine = new Set(cover(s));
         // Two market-restricted slots for DIFFERENT markets never compete for
-        // the same brand's data, so they're allowed to share hours (e.g. an
-        // IST "Lunch" and a UK "Lunch" at the same wall-clock window). A slot
-        // with no market restriction applies to everyone, so it still
+        // the same brand's data, so they're allowed to share hours (e.g. a
+        // GST "Lunch" and an AST "Lunch" at the same wall-clock window). A
+        // slot with no market restriction applies to everyone, so it still
         // conflicts with any market-specific slot at overlapping hours.
         for (const o of others) {
           const marketsCanClash = !s.market || !o.market || s.market === o.market;
