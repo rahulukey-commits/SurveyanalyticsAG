@@ -191,7 +191,11 @@
           for (let d = 0; d <= path.length; d++) {
             const p = path.slice(0, d);
             levels.appendChild(levelBlock(metric, p, d, path[d] || null, brandF, picked => {
-              path.length = d; path.push(picked); renderLevels(); requestAnimationFrame(() => Charts.resizeAll());
+              // Clicking the already-open bar again closes it (and everything
+              // drilled deeper); clicking a different bar re-drills as usual.
+              if (path[d] === picked) path.length = d;
+              else { path.length = d; path.push(picked); }
+              renderLevels(); requestAnimationFrame(() => Charts.resizeAll());
             }, () => { path.length = 0; renderLevels(); requestAnimationFrame(() => Charts.resizeAll()); }));
           }
           requestAnimationFrame(() => Charts.resizeAll());
