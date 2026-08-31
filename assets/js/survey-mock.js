@@ -588,6 +588,7 @@
     return { value, responses, promoter, passive: Math.max(0, 100 - promoter - detractor), detractor };
   }
   function orgSplitChildren(seed, parentVal, parentResp, keys, mk) {
+    if (!parentResp) return []; // nothing to split — no fabricated "0 responses" rows below a "no data" parent
     const rr = rng(hash(seed));
     let assigned = 0;
     return keys.map((k, i) => {
@@ -601,36 +602,34 @@
       return { name: k, value, responses: resp, promoter, passive: Math.max(0, 100 - promoter - detractor), detractor, trend: Math.round(rr() * 20 - 10) };
     });
   }
-  // Deterministic, seeded 2-5 of BU_NAMES for a given store — which brands
-  // actually have a concession there.
-  function storeBrands(storeName) {
-    const rr = rng(hash('storebrands|' + storeName));
-    const shuffled = BU_NAMES.map(n => [rr(), n]).sort((a, b) => a[0] - b[0]).map(x => x[1]);
-    return shuffled.slice(0, Math.min(BU_NAMES.length, 2 + hmod(storeName, Math.min(4, BU_NAMES.length - 1))));
-  }
-  function orgDrilldown(metric, path) {
+  // `brands` optionally restricts the whole hierarchy to a subset of
+  // BU_NAMES — filters COUNTRY_CONTRIB before rolling up, so every deeper
+  // level (City, Store) inherits the restriction through its parent's
+  // already-filtered total, without needing its own brand awareness.
+  function orgDrilldown(metric, path, brands) {
     const mk = metricKey[metric] || 'nps';
+    const contribsFor = code => (COUNTRY_CONTRIB[code] || []).filter(c => !brands || brands.indexOf(c.brand) >= 0);
     if (!path || !path.length) {
+      // A country with 0 responses (e.g. a brand filter that excludes the
+      // only brands present there) means "no data here," not a real 0 NPS —
+      // drop it rather than show a misleading zero score.
       return COUNTRY_LIST.map(code => {
-        const agg = orgAggregate(COUNTRY_CONTRIB[code] || [], mk);
+        const agg = orgAggregate(contribsFor(code), mk);
         return Object.assign({ name: COUNTRY_NAMES[code] || code }, agg, { trend: Math.round(rng(hash('org|country|' + code))() * 20 - 10) });
-      }).sort((a, b) => b.responses - a.responses);
+      }).filter(c => c.responses > 0).sort((a, b) => b.responses - a.responses);
     }
     const countryCode = Object.keys(COUNTRY_NAMES).find(c => COUNTRY_NAMES[c] === path[0]) || path[0];
-    const countryAgg = orgAggregate(COUNTRY_CONTRIB[countryCode] || [], mk);
+    const countryAgg = orgAggregate(contribsFor(countryCode), mk);
     const cities = CITIES[countryCode] || [];
     if (path.length === 1) return orgSplitChildren('org|city|' + path.join('|'), countryAgg.value, countryAgg.responses, cities, mk);
     const cityAgg = orgSplitChildren('org|city|' + path[0], countryAgg.value, countryAgg.responses, cities, mk).find(c => c.name === path[1]);
     if (!cityAgg) return [];
     const stores = storesFor(path[1]);
     if (path.length === 2) return orgSplitChildren('org|store|' + path.join('|'), cityAgg.value, cityAgg.responses, stores, mk);
-    const storeAgg = orgSplitChildren('org|store|' + path[0] + '|' + path[1], cityAgg.value, cityAgg.responses, stores, mk).find(m => m.name === path[2]);
-    if (!storeAgg) return [];
-    if (path.length === 3) return orgSplitChildren('org|brand|' + path.join('|'), storeAgg.value, storeAgg.responses, storeBrands(path[2]), mk);
     return [];
   }
-  function orgLevelName(depth) { return ['Country', 'City', 'Store', 'Brand'][depth] || 'Brand'; }
-  function orgCanDrill(depth) { return depth < 3; }
+  function orgLevelName(depth) { return ['Country', 'City', 'Store'][depth] || 'Store'; }
+  function orgCanDrill(depth) { return depth < 2; }
 
   // Both Brand and Country scope's entity are arrays — multi-select.
   // orderTypes optionally restricts to one or more TI_ORDER_TYPES; omitted

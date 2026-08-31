@@ -79,6 +79,71 @@
     }
     const bandLegend = () => el(`<div class="sa-legend">${API.BAND_COLORS.map(b => `<span class="sa-legend-item"><i class="sa-dot" style="background:${b.color}"></i>${b.label}</span>`).join('')}</div>`);
 
+    // Shared brand multi-select — button shows "All Brands" (or "N brands" /
+    // a single name) and opens a searchable checklist with a Select
+    // All/Deselect All toggle. Used by Progressive Drilldown's Countries
+    // filter and Time Intelligence's brand picker.
+    function brandEntityLabel(sel) {
+      if (sel.length === API.brandNames.length) return 'All Brands';
+      if (sel.length === 1) return sel[0];
+      return sel.length + ' brands';
+    }
+    function brandMultiSelect(state, onChange) {
+      const btn = el('<div class="select" tabindex="0"></div>');
+      const paintBtn = () => { btn.textContent = brandEntityLabel(state.entity); };
+      paintBtn();
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        U.closeMenus();
+        let q = '';
+        const menu = el('<div class="menu sa-brand-menu"></div>');
+        menu.addEventListener('click', e2 => e2.stopPropagation());
+        const searchRow = el('<div class="sa-brand-search"><input type="text" placeholder="Search Brands…"/><span class="sa-brand-search-ic">🔍</span></div>');
+        const bulkRow = el('<div></div>');
+        const listWrap = el('<div></div>');
+        const hintRow = el('<div class="sa-brand-hint" style="display:none">At least one brand must stay selected.</div>');
+        menu.appendChild(searchRow); menu.appendChild(bulkRow); menu.appendChild(listWrap); menu.appendChild(hintRow);
+        let hintTimer = null;
+        function flashHint() { hintRow.style.display = ''; clearTimeout(hintTimer); hintTimer = setTimeout(() => { hintRow.style.display = 'none'; }, 2200); }
+        function paintMenu() {
+          const names = API.brandNames.filter(n => !q.trim() || n.toLowerCase().indexOf(q.trim().toLowerCase()) >= 0);
+          const allOn = names.length > 0 && names.every(n => state.entity.indexOf(n) >= 0);
+          bulkRow.innerHTML = '';
+          const bulkBtn = el(`<div class="mi"><b>${allOn ? 'Deselect All' : 'Select All'}</b></div>`);
+          bulkBtn.addEventListener('click', () => {
+            if (allOn) {
+              const remaining = state.entity.filter(n => names.indexOf(n) < 0);
+              if (!remaining.length) { flashHint(); state.entity = [names[0]]; }
+              else state.entity = remaining;
+            } else { const set = new Set(state.entity); names.forEach(n => set.add(n)); state.entity = Array.from(set); }
+            paintBtn(); paintMenu(); onChange();
+          });
+          bulkRow.appendChild(bulkBtn);
+          listWrap.innerHTML = '';
+          if (!names.length) { listWrap.appendChild(el('<div class="mi muted">No brands match.</div>')); }
+          names.forEach(n => {
+            const on = state.entity.indexOf(n) >= 0;
+            const item = el(`<div class="mi ${on ? 'checked' : ''}">${n}${on ? '<span class="ck">✓</span>' : ''}</div>`);
+            item.addEventListener('click', () => {
+              const i = state.entity.indexOf(n);
+              if (i >= 0) { if (state.entity.length > 1) state.entity.splice(i, 1); else { flashHint(); return; } }
+              else state.entity.push(n);
+              paintBtn(); paintMenu(); onChange();
+            });
+            listWrap.appendChild(item);
+          });
+        }
+        $('input', searchRow).addEventListener('input', ev => { q = ev.target.value; paintMenu(); });
+        paintMenu();
+        document.body.appendChild(menu);
+        const r = btn.getBoundingClientRect();
+        const left = Math.min(r.left, window.innerWidth - 260);
+        menu.style.left = left + 'px'; menu.style.top = (r.bottom + 6) + 'px';
+        $('input', searchRow).focus();
+      });
+      return btn;
+    }
+
     // =========================================================================
     // 1. Progressive Drilldown
     // =========================================================================
@@ -86,6 +151,7 @@
       host.appendChild(subTabs([{ k: 'NPS', label: 'NPS' }, { k: 'CSAT', label: 'CSAT' }, { k: 'CES', label: 'CES' }, { k: 'RATING', label: 'RATING' }],
         state.drill, k => { state.drill = k; draw(); }));
       const holder = el('<div></div>'); host.appendChild(holder);
+      const brandF = { entity: API.brandNames.slice() };
       draw();
 
       function draw() {
@@ -113,7 +179,7 @@
 
         // ---- Country-first progressive drilldown levels
         const c2 = el('<section class="sa-card"></section>');
-        c2.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any country to drill down to cities, stores and brands.</div>`));
+        c2.appendChild(el(`<div class="sa-info-banner"><span class="sa-i">ⓘ</span> Click on any country to drill down to cities and stores.</div>`));
         const levels = el('<div></div>');
         c2.appendChild(levels);
         holder.appendChild(c2);
@@ -124,9 +190,9 @@
           levels.innerHTML = '';
           for (let d = 0; d <= path.length; d++) {
             const p = path.slice(0, d);
-            levels.appendChild(levelBlock(metric, p, d, path[d] || null, picked => {
+            levels.appendChild(levelBlock(metric, p, d, path[d] || null, brandF, picked => {
               path.length = d; path.push(picked); renderLevels(); requestAnimationFrame(() => Charts.resizeAll());
-            }));
+            }, () => { path.length = 0; renderLevels(); requestAnimationFrame(() => Charts.resizeAll()); }));
           }
           requestAnimationFrame(() => Charts.resizeAll());
         }
@@ -134,17 +200,18 @@
     }
 
     // one drilldown level (bar with Load More/Show All  ⇄  table with pagination)
-    function levelBlock(metric, path, depth, selected, onPick) {
-      const all = API.orgDrilldown(metric, path);
+    function levelBlock(metric, path, depth, selected, brandF, onPick, onBrandChange) {
+      const all = API.orgDrilldown(metric, path, brandF.entity);
       const wrap = el('<div class="sa-level"></div>');
       const vs = { view: 'bar', shown: depth === 0 ? 5 : all.length, page: 0, per: 10, search: '', dir: -1 };
       const totalResp = all.reduce((a, r) => a + r.responses, 0);
+      const allBrands = brandF.entity.length === API.brandNames.length;
 
       const title = depth === 0
         ? `<b>Countries</b>`
         : `<span class="muted">${['Countries'].concat(path.slice(0, -1)).join(' › ')} › </span><b>${path[path.length - 1]}</b> <span class="muted">›</span> <b>${API.orgLevelName(depth)}</b>`;
       const agg0 = API.aggregate(metric);
-      const respLabel = depth === 0 ? agg0.responses : fmt(totalResp);
+      const respLabel = (depth === 0 && allBrands) ? agg0.responses : fmt(totalResp);
       const head = el(`<div class="sa-level-head"><div class="sa-level-title">${title}
         <div class="muted sa-sub">Total Surveys Generated: ${agg0.totalSurveys}&nbsp;&nbsp;Responses Received: ${respLabel}</div></div>
         <div class="sa-level-tools"></div></div>`);
@@ -153,7 +220,7 @@
       const sortEl = el('<button class="sa-tool" title="Sort">⇅</button>');
       const barBtn = el('<button class="sa-tool sa-tool-active" title="Bar view">▥</button>');
       const tblBtn = el('<button class="sa-tool" title="Table view">☰</button>');
-      if (depth === 0) tools.appendChild(searchEl);
+      if (depth === 0) { tools.appendChild(brandMultiSelect(brandF, onBrandChange)); tools.appendChild(searchEl); }
       tools.appendChild(sortEl); tools.appendChild(barBtn); tools.appendChild(tblBtn);
       wrap.appendChild(head);
       wrap.appendChild(bandLegend());
@@ -478,79 +545,12 @@
       // Brand and Country are multi-select: entity is always an array;
       // clicking an option in the dropdown toggles its membership (matches
       // the existing brand-chip picker in Metrics Comparison).
-      function brandEntityLabel(sel) {
-        if (sel.length === API.brandNames.length) return 'All Brands';
-        if (sel.length === 1) return sel[0];
-        return sel.length + ' brands';
-      }
+      // brandEntityLabel/brandMultiSelect live in the shared outer scope
+      // (near filterRow) so Progressive Drilldown can reuse them too.
       function countryEntityLabel(sel) {
         if (sel.length === TI.countryList.length) return 'All Countries';
         if (sel.length === 1) return sel[0];
         return sel.length + ' countries';
-      }
-      // Returns { row, chips } as two SEPARATE elements — row is a single-line
-      // control meant to sit inline with the other filters (never taller than
-      // them); chips is a full-width pill row meant to be placed below the
-      // whole filter bar, so selecting multiple brands/countries never
-      // distorts the filter row's alignment.
-      // Brand picker: button shows "All Brands" (or "N brands" / a single
-      // name) and opens a searchable checklist with a Select All/Deselect
-      // All toggle — replaces the old plain "Overall" mode entirely, since
-      // "every brand selected" already sums to the exact same numbers.
-      function brandMultiSelect(state, onChange) {
-        const btn = el('<div class="select" tabindex="0"></div>');
-        const paintBtn = () => { btn.textContent = brandEntityLabel(state.entity); };
-        paintBtn();
-        btn.addEventListener('click', e => {
-          e.stopPropagation();
-          U.closeMenus();
-          let q = '';
-          const menu = el('<div class="menu sa-brand-menu"></div>');
-          menu.addEventListener('click', e2 => e2.stopPropagation());
-          const searchRow = el('<div class="sa-brand-search"><input type="text" placeholder="Search Brands…"/><span class="sa-brand-search-ic">🔍</span></div>');
-          const bulkRow = el('<div></div>');
-          const listWrap = el('<div></div>');
-          const hintRow = el('<div class="sa-brand-hint" style="display:none">At least one brand must stay selected.</div>');
-          menu.appendChild(searchRow); menu.appendChild(bulkRow); menu.appendChild(listWrap); menu.appendChild(hintRow);
-          let hintTimer = null;
-          function flashHint() { hintRow.style.display = ''; clearTimeout(hintTimer); hintTimer = setTimeout(() => { hintRow.style.display = 'none'; }, 2200); }
-          function paintMenu() {
-            const names = API.brandNames.filter(n => !q.trim() || n.toLowerCase().indexOf(q.trim().toLowerCase()) >= 0);
-            const allOn = names.length > 0 && names.every(n => state.entity.indexOf(n) >= 0);
-            bulkRow.innerHTML = '';
-            const bulkBtn = el(`<div class="mi"><b>${allOn ? 'Deselect All' : 'Select All'}</b></div>`);
-            bulkBtn.addEventListener('click', () => {
-              if (allOn) {
-                const remaining = state.entity.filter(n => names.indexOf(n) < 0);
-                if (!remaining.length) { flashHint(); state.entity = [names[0]]; }
-                else state.entity = remaining;
-              } else { const set = new Set(state.entity); names.forEach(n => set.add(n)); state.entity = Array.from(set); }
-              paintBtn(); paintMenu(); onChange();
-            });
-            bulkRow.appendChild(bulkBtn);
-            listWrap.innerHTML = '';
-            if (!names.length) { listWrap.appendChild(el('<div class="mi muted">No brands match.</div>')); }
-            names.forEach(n => {
-              const on = state.entity.indexOf(n) >= 0;
-              const item = el(`<div class="mi ${on ? 'checked' : ''}">${n}${on ? '<span class="ck">✓</span>' : ''}</div>`);
-              item.addEventListener('click', () => {
-                const i = state.entity.indexOf(n);
-                if (i >= 0) { if (state.entity.length > 1) state.entity.splice(i, 1); else { flashHint(); return; } }
-                else state.entity.push(n);
-                paintBtn(); paintMenu(); onChange();
-              });
-              listWrap.appendChild(item);
-            });
-          }
-          $('input', searchRow).addEventListener('input', ev => { q = ev.target.value; paintMenu(); });
-          paintMenu();
-          document.body.appendChild(menu);
-          const r = btn.getBoundingClientRect();
-          const left = Math.min(r.left, window.innerWidth - 260);
-          menu.style.left = left + 'px'; menu.style.top = (r.bottom + 6) + 'px';
-          $('input', searchRow).focus();
-        });
-        return btn;
       }
       // No Scope selector, no Country option — just the one brand picker.
       // state.scope stays fixed at 'Brand' (every TI.* function still keys
